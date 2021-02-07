@@ -1,0 +1,40 @@
+[package]
+name = "centerline"
+version = "0.0.1"
+authors = ["eadf"]
+edition = "2018"
+description = "Work in progress"
+readme = "README.md"
+repository = "https://github.com/eadf/centerline.rs"
+license = "AGPL-3.0"
+keywords = ["geometry"]
+
+[dependencies]
+num = "^0.3.1"
+ordered-float = "^2.1.1"
+fnv = "^1.0.7"
+rb_tree = "^0.3.2"
+vec_map = "^0.8.2"
+num-bigint = "^0.3.1"
+num-traits = "^0.2.14"
+geo = "^0.17.0"
+boostvoronoi = "0.3.1"
+intersect2d = "0.1.2"
+
+#[[example]]
+#name = "simple"
+#path = "example/simple.rs"
+
+# this bin is for development test purposes
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[dev-dependencies]
+fltk = "^0.14.2"
+itertools = "^0.10.0"
+
+[features]
+# this is used to print algorithm progression traces to the console
+console_trace = []
+
