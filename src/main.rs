@@ -1,9 +1,9 @@
 use boostvoronoi::voronoi_builder as VB;
 use boostvoronoi::InputType;
 use geo::{Coordinate, Line};
-use std::ops::Neg;
 #[allow(unused_imports)]
 use intersect2d;
+use std::ops::Neg;
 
 type I1 = i32;
 type F1 = f64;
@@ -12,8 +12,8 @@ type F2 = f64;
 
 #[allow(dead_code)]
 fn to_segments<T>(points: &[[T; 4]]) -> Vec<Line<T>>
-    where
-        T: InputType + Neg<Output = T>,
+where
+    T: InputType + Neg<Output = T>,
 {
     let mut rv = Vec::with_capacity(points.len());
     for p in points.iter() {
@@ -27,7 +27,7 @@ fn to_segments<T>(points: &[[T; 4]]) -> Vec<Line<T>>
 
 fn main() {
     #[allow(unused_variables)]
-        let output = {
+    let output = {
         let segments: [[I1; 4]; 5] = [
             [200, 200, 200, 400],
             [200, 400, 400, 400],

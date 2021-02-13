@@ -1,6 +1,6 @@
 [package]
 name = "centerline"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["eadf"]
 edition = "2018"
 description = "Work in progress"
@@ -18,12 +18,15 @@ vec_map = "^0.8.2"
 num-bigint = "^0.3.1"
 num-traits = "^0.2.14"
 geo = "^0.17.0"
-boostvoronoi = "0.3.1"
-intersect2d = "0.1.2"
+boostvoronoi = "^0.3.1"
+cgmath = "^0.18.0"
+approx = "^0.4.0"
+obj-rs = "^0.6.2"
+thiserror = "^1.0.23"
 
-#[[example]]
-#name = "simple"
-#path = "example/simple.rs"
+[[example]]
+name = "fltk_gui"
+path = "example/fltk_gui.rs"
 
 # this bin is for development test purposes
 [[bin]]
