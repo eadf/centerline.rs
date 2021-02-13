@@ -19,6 +19,12 @@ num-bigint = "^0.3.1"
 num-traits = "^0.2.14"
 geo = "^0.17.0"
 boostvoronoi = "^0.3.1"
+#intersect2d = "^0.2.0"
+#linestring = "^0.0.1"
+intersect2d = {git = "https://github.com/eadf/intersect2d.rs", branch = "master"}
+#intersect2d = {path = "../intersect2d.rs"}
+linestring = {git = "https://github.com/eadf/linestring.rs", branch = "master", features = ["impl-cgmath"]}
+#linestring = {path = "../linestring.rs", features = ["impl-cgmath"]}
 cgmath = "^0.18.0"
 approx = "^0.4.0"
 obj-rs = "^0.6.2"
@@ -28,16 +34,7 @@ thiserror = "^1.0.23"
 name = "fltk_gui"
 path = "example/fltk_gui.rs"
 
-# this bin is for development test purposes
-[[bin]]
-name = "main"
-path = "src/main.rs"
-
 [dev-dependencies]
 fltk = "^0.14.2"
 itertools = "^0.10.0"
-
-[features]
-# this is used to print algorithm progression traces to the console
-console_trace = []
 
