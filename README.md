@@ -5,3 +5,6 @@
 [![dependency status](https://deps.rs/crate/centerline/0.0.2/status.svg)](https://deps.rs/crate/centerline/0.0.2)
 
 #Work in progress, nothing to see here yet!
+
+Requires #![feature(hash_drain_filter)] i.e. +nightly
+
