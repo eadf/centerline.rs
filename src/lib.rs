@@ -7,11 +7,12 @@
 #![allow(unused_imports)]
 #![feature(hash_drain_filter)]
 
-use boostvoronoi::voronoi_builder as VB;
+use boostvoronoi::builder as VB;
 use boostvoronoi::InputType;
-use geo::{Coordinate, Line};
-use intersect2d;
-use linestring::cgmath_impl;
+//use geo::{Coordinate, Line};
+//use intersect2d;
+use linestring::cgmath_2d;
+use linestring::cgmath_3d;
 use obj;
 use std::fmt::Display;
 use std::ops::Neg;
@@ -39,8 +40,8 @@ pub enum CenterlineError {
     #[error(transparent)]
     IoError(#[from] std::io::Error),
 
-    #[error(transparent)]
-    Intersect(#[from] intersect2d::Error),
+    //#[error(transparent)]
+    //Intersect(#[from] intersect2d::Error),
 }
 
 #[derive(Debug)]
@@ -75,7 +76,7 @@ fn paint_vertex(vertices: &mut fnv::FnvHashMap<usize, Vertices>, vertex_id: usiz
 /// remove internal edges from a wavefront-obj object
 pub fn remove_internal_edges(
     obj: obj::raw::RawObj,
-) -> Result<Vec<cgmath_impl::LineStringSet3<f32>>, CenterlineError> {
+) -> Result<Vec<cgmath_3d::LineStringSet3<f32>>, CenterlineError> {
     for p in obj.points.iter() {
         // Ignore all points
         println!("Ignored point:{:?}", p);
@@ -90,11 +91,11 @@ pub fn remove_internal_edges(
 
         let v = match &obj.lines[i] {
             obj::raw::object::Line::P(a) => {
-                let mut v = a.clone();
+                let v = a.clone();
                 v
             }
             obj::raw::object::Line::PT(a) => {
-                let mut v = a.iter().map(|x| x.0).collect::<Vec<usize>>();
+                let v = a.iter().map(|x| x.0).collect::<Vec<usize>>();
                 v
             }
         };
@@ -170,7 +171,7 @@ pub fn remove_internal_edges(
     for e in all_edges.iter() {
         let id = e.0;
         let other = e.1;
-        if let Some(mut v) = vertices.get_mut(&id) {
+        if let Some(v) = vertices.get_mut(&id) {
             v.edges.push(other);
         } else {
             let _ = vertices.insert(
@@ -185,7 +186,7 @@ pub fn remove_internal_edges(
         }
         let id = e.1;
         let other = e.0;
-        if let Some(mut v) = vertices.get_mut(&id) {
+        if let Some(v) = vertices.get_mut(&id) {
             v.edges.push(other);
         } else {
             let _ = vertices.insert(
@@ -256,15 +257,16 @@ pub fn remove_internal_edges(
     //dbg!(6);
     // now we have a list of groups of vertices, each group are connected by edges.
     // Create lists of linestrings3 by walking the edges of each vertex set.
-    let mut rv = Vec::<cgmath_impl::LineStringSet3<f32>>::with_capacity(shape_separation.len());
+    let mut rv = Vec::<cgmath_3d::LineStringSet3<f32>>::with_capacity(shape_separation.len());
 
+    #[allow(unused_assignments)]
     for rvi in shape_separation.iter() {
         if rvi.is_empty() {
             continue;
         }
 
-        let mut rvs = cgmath_impl::LineStringSet3::<f32>::with_capacity(shape_separation.len());
-        let mut als = cgmath_impl::LineString3::with_capacity(rvi.len());
+        let mut rvs = cgmath_3d::LineStringSet3::<f32>::with_capacity(shape_separation.len());
+        let mut als = cgmath_3d::LineString3::with_capacity(rvi.len());
 
         let started_with: usize = rvi.iter().next().unwrap().1.id;
         let mut prev: usize = started_with;
@@ -276,11 +278,11 @@ pub fn remove_internal_edges(
         loop {
             prev = current;
             current = next;
-            if let Some(newV) = rvi.get(&current) {
-                als.push(cgmath::point3(newV.point.0, newV.point.1, newV.point.2));
+            if let Some(current_vertex) = rvi.get(&current) {
+                als.push(cgmath::point3(current_vertex.point.0, current_vertex.point.1, current_vertex.point.2));
 
                 //assert_eq!(newV.edges.len(),2);
-                next = *newV.edges.iter().filter(|x| **x != prev).next().unwrap();
+                next = *current_vertex.edges.iter().filter(|x| **x != prev).next().unwrap();
 
                 //println!("current:{} prev:{} next:{} startedwith:{}", current, prev, next, started_with);
             } else {
