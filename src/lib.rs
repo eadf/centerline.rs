@@ -13,7 +13,6 @@ use boostvoronoi::InputType;
 //use intersect2d;
 use linestring::cgmath_2d;
 use linestring::cgmath_3d;
-use obj;
 use std::fmt::Display;
 use std::ops::Neg;
 use thiserror::Error;
@@ -39,7 +38,6 @@ pub enum CenterlineError {
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
-
     //#[error(transparent)]
     //Intersect(#[from] intersect2d::Error),
 }
@@ -90,14 +88,8 @@ pub fn remove_internal_edges(
         //println!("Line:{:?}", obj.lines[i]);
 
         let v = match &obj.lines[i] {
-            obj::raw::object::Line::P(a) => {
-                let v = a.clone();
-                v
-            }
-            obj::raw::object::Line::PT(a) => {
-                let v = a.iter().map(|x| x.0).collect::<Vec<usize>>();
-                v
-            }
+            obj::raw::object::Line::P(a) => a.clone(),
+            obj::raw::object::Line::PT(a) => a.iter().map(|x| x.0).collect::<Vec<usize>>(),
         };
         //println!("Line Vec:{:?}", v);
         let mut i1 = v.iter();
@@ -279,10 +271,17 @@ pub fn remove_internal_edges(
             prev = current;
             current = next;
             if let Some(current_vertex) = rvi.get(&current) {
-                als.push(cgmath::point3(current_vertex.point.0, current_vertex.point.1, current_vertex.point.2));
+                als.push(cgmath::point3(
+                    current_vertex.point.0,
+                    current_vertex.point.1,
+                    current_vertex.point.2,
+                ));
 
                 //assert_eq!(newV.edges.len(),2);
-                next = *current_vertex.edges.iter().filter(|x| **x != prev).next().unwrap();
+                next = *current_vertex
+                    .edges
+                    .iter().find(|x| **x != prev)
+                    .unwrap();
 
                 //println!("current:{} prev:{} next:{} startedwith:{}", current, prev, next, started_with);
             } else {

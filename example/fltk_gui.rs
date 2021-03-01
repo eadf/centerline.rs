@@ -44,21 +44,25 @@ licenses /why-not-lgpl.html>.
 */
 #![feature(hash_drain_filter)]
 
+use boostvoronoi::builder::Builder;
+use boostvoronoi::diagram::VoronoiDiagram;
+use boostvoronoi::BvError;
+
 use centerline::CenterlineError;
 use cgmath::SquareMatrix;
 use cgmath::Transform;
+
 use fltk::app::redraw;
 use fltk::valuator::HorNiceSlider;
 use fltk::*;
-use fltk::{app, button::*, draw::*, frame::*, window::*};
+use fltk::{app, draw::*, frame::*, window::*};
 
-use linestring::cgmath_2d;
+use cgmath;
 use linestring::cgmath_2d::LineStringSet2;
 use linestring::cgmath_3d;
-//use linestring::cgmath_3d::LineStringSet3;
-use cgmath;
 use obj;
 use ordered_float::OrderedFloat;
+use rayon::prelude::*;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::BufReader;
@@ -79,15 +83,22 @@ pub enum GuiMessage {
     SliderDotChanged(f64),
 }
 
-struct SharedData {
+/// Data containing an individual shape, this will be processed by a single thread.
+struct Shape {
     // the input data after it has been transformed to our coordinate system
     // but not simplified.
-    raw_data: Vec<LineStringSet2<f32>>,
-    // the simplified data, also input to boost voronoi
-    // This should never be None (unless during iteration when the value is take():en)
-    voronoi_input: Option<Vec<Vec<boostvoronoi::Line<i64>>>>,
+    raw_data: LineStringSet2<f32>,
+
+    // the simplified version of 'raw_data', also input to boost voronoi
+    voronoi_input: Option<Vec<boostvoronoi::Line<i32>>>,
     // the unmodified voronoi output
-    //voronoi_output: Vec<something>,
+    voronoi_output: Option<Result<VoronoiDiagram<i32, f32, i64, f64>, BvError>>,
+    centerline: Option<bool>,
+    simplified_centerline: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Configuration {
     window_center: (i32, i32),
     input_distance: f64,
     input_distance_dirty: bool,
@@ -95,7 +106,12 @@ struct SharedData {
     centerline_distance_dirty: bool,
     normalized_dot: f64,
     normalized_dot_dirty: bool,
-    lastMessage: Option<GuiMessage>,
+    last_message: Option<GuiMessage>,
+}
+
+struct SharedData {
+    shapes: Option<Vec<Shape>>,
+    configuration: Configuration,
 }
 
 fn main() -> Result<(), CenterlineError> {
@@ -111,7 +127,7 @@ fn main() -> Result<(), CenterlineError> {
 
     let mut slider_pre =
         HorNiceSlider::new(5, 5 + HF, WF, 25, "Input data simplification distance");
-    slider_pre.set_value(0.0);
+    slider_pre.set_value(1.0);
     slider_pre.set_frame(FrameType::PlasticUpBox);
     slider_pre.set_color(Color::White);
 
@@ -127,7 +143,7 @@ fn main() -> Result<(), CenterlineError> {
         25,
         "Centerline data simplification distance",
     );
-    slider_post.set_value(0.0);
+    slider_post.set_value(1.0);
     slider_post.set_frame(FrameType::PlasticUpBox);
     slider_post.set_color(Color::White);
 
@@ -135,22 +151,23 @@ fn main() -> Result<(), CenterlineError> {
     wind.end();
     wind.show();
     let shared_data_rc = Rc::from(RefCell::from(SharedData {
-        raw_data: Vec::default(),
-        voronoi_input: Some(Vec::default()),
-        window_center: (WF / 2, HF / 2),
-        centerline_distance: 0.0,
-        centerline_distance_dirty: true,
-        normalized_dot: 0.0,
-        normalized_dot_dirty: true,
-        input_distance: 0.0,
-        input_distance_dirty: true,
-        lastMessage: None,
+        shapes: None,
+        configuration: Configuration {
+            window_center: (WF / 2, HF / 2),
+            centerline_distance: 0.0,
+            centerline_distance_dirty: true,
+            normalized_dot: 0.0,
+            normalized_dot_dirty: true,
+            input_distance: 0.0,
+            input_distance_dirty: true,
+            last_message: None,
+        },
     }));
 
     let (sender, receiver) = app::channel::<GuiMessage>();
-    sender.send(GuiMessage::SliderPreChanged(0.0));
+    sender.send(GuiMessage::SliderPreChanged(50.0));
     slider_pre.set_callback2(move |s| {
-        let value = s.value() as f64 * 50.0;
+        let value = s.value() as f64 * 100.0;
         s.set_label(
             ("               Input data simplification distance:".to_string()
                 + &value.to_string()
@@ -172,7 +189,7 @@ fn main() -> Result<(), CenterlineError> {
     });
 
     slider_post.set_callback2(move |s| {
-        let value = s.value() as f64 * 50.0;
+        let value = s.value() as f64 * 100.0;
         s.set_label(
             ("               Centerline simplification distance:".to_string()
                 + &value.to_string()
@@ -194,29 +211,31 @@ fn main() -> Result<(), CenterlineError> {
         set_line_style(LineStyle::Solid, 1);
         draw::set_draw_color(Color::Blue);
 
-        let voronoi_input = data_bm.voronoi_input.take().unwrap();
-        for set in voronoi_input.iter() {
-            println!("2set.len() {}", set.len());
-            for a_line in set.iter() {
-                // The scaling transform is already multiplied by 1024
-                let x1 = (a_line.start.x >> 10) as i32 + data_bm.window_center.0;
-                let y1 = (a_line.start.y >> 10) as i32 + data_bm.window_center.1;
-                let x2 = (a_line.end.x >> 10) as i32 + data_bm.window_center.0;
-                let y2 = (a_line.end.y >> 10) as i32 + data_bm.window_center.1;
-                draw::draw_line(x1, y1, x2, y2);
-                match data_bm.lastMessage {
-                    Some(GuiMessage::SliderPreChanged(_)) => {
-                        draw::draw_line(x1 - 2, y1 - 2, x1 + 2, y1 + 2);
-                        draw::draw_line(x1 + 2, y1 - 2, x1 - 2, y1 + 2);
+        let opt_shapes = data_bm.shapes.take();
+        if let Some(vec_shapes) = opt_shapes {
+            for shape in vec_shapes.iter() {
+                //println!("2set.len() {}", shape.voronoi_input..len());
+                for a_line in shape.voronoi_input.iter().flatten() {
+                    // The scaling transform is already multiplied by 1024
+                    let x1 = (a_line.start.x >> 10) as i32 + data_bm.configuration.window_center.0;
+                    let y1 = (a_line.start.y >> 10) as i32 + data_bm.configuration.window_center.1;
+                    let x2 = (a_line.end.x >> 10) as i32 + data_bm.configuration.window_center.0;
+                    let y2 = (a_line.end.y >> 10) as i32 + data_bm.configuration.window_center.1;
+                    draw::draw_line(x1, y1, x2, y2);
+                    match data_bm.configuration.last_message {
+                        Some(GuiMessage::SliderPreChanged(_)) => {
+                            draw::draw_line(x1 - 2, y1 - 2, x1 + 2, y1 + 2);
+                            draw::draw_line(x1 + 2, y1 - 2, x1 - 2, y1 + 2);
+                        }
+                        _ => (),
                     }
-                    _ => (),
                 }
             }
+            data_bm.shapes = Some(vec_shapes);
         }
-        data_bm.voronoi_input = Some(voronoi_input);
     });
 
-    let shared_data_c = Rc::clone(&shared_data_rc);
+    //let shared_data_c = Rc::clone(&shared_data_rc);
     wind.handle(move |ev| match ev {
         enums::Event::Released => {
             let event = &app::event_coords();
@@ -232,19 +251,19 @@ fn main() -> Result<(), CenterlineError> {
             let mut shared_data_bm = shared_data_c.borrow_mut();
             match msg {
                 GuiMessage::SliderPreChanged(value) => {
-                    shared_data_bm.input_distance = value;
-                    shared_data_bm.input_distance_dirty = true;
+                    shared_data_bm.configuration.input_distance = value;
+                    shared_data_bm.configuration.input_distance_dirty = true;
                 }
                 GuiMessage::SliderDotChanged(value) => {
-                    shared_data_bm.normalized_dot = value;
-                    shared_data_bm.normalized_dot_dirty = true;
+                    shared_data_bm.configuration.normalized_dot = value;
+                    shared_data_bm.configuration.normalized_dot_dirty = true;
                 }
                 GuiMessage::SliderPostChanged(value) => {
-                    shared_data_bm.centerline_distance = value;
-                    shared_data_bm.centerline_distance_dirty = true;
+                    shared_data_bm.configuration.centerline_distance = value;
+                    shared_data_bm.configuration.centerline_distance_dirty = true;
                 }
             }
-            shared_data_bm.lastMessage = Some(msg);
+            shared_data_bm.configuration.last_message = Some(msg);
             re_calculate(&mut shared_data_bm);
             redraw();
         }
@@ -255,84 +274,139 @@ fn main() -> Result<(), CenterlineError> {
 /// Re-calculate the center-line and all of the other parameters
 /// Todo: rayon the whole chain per shape
 fn re_calculate(shared_data_bm: &mut RefMut<SharedData>) {
-    let input_changed = if shared_data_bm.input_distance_dirty{
-        recalculate_voronoi_input(shared_data_bm);
-        true
-    } else {false};
-    let diagram_changed = if input_changed || shared_data_bm.normalized_dot_dirty {
-        recalculate_voronoi_diagram(shared_data_bm);
-        true
-    } else {false};
-    let _centerline_changed = if diagram_changed || shared_data_bm.centerline_distance_dirty {
-        recalculate_centerline(shared_data_bm);
-        true
-    } else {false};
-    shared_data_bm.normalized_dot_dirty = false;
-    shared_data_bm.centerline_distance_dirty = false;
-    shared_data_bm.input_distance_dirty = false;
+    let shapes = shared_data_bm.shapes.take();
+    let configuration = shared_data_bm.configuration.clone();
+    if let Some(mut shapes) = shapes {
+        shapes = shapes
+            .into_iter() //into_par_iter()
+            .map(|x| re_calculate_m(x, configuration))
+            .collect();
+        shared_data_bm.shapes = Some(shapes);
+    }
+    shared_data_bm.configuration.normalized_dot_dirty = false;
+    shared_data_bm.configuration.centerline_distance_dirty = false;
+    shared_data_bm.configuration.input_distance_dirty = false;
     redraw();
 }
 
+/// This is what a single thread does in sequence
+fn re_calculate_m(mut shape: Shape, configuration: Configuration) -> Shape {
+    let input_changed = if shape.voronoi_input.is_none() || configuration.input_distance_dirty {
+        recalculate_voronoi_input(&mut shape, configuration);
+        true
+    } else {
+        false
+    };
+    let diagram_changed = if shape.voronoi_output.is_none() || input_changed {
+        recalculate_voronoi_diagram(&mut shape, configuration);
+        true
+    } else {
+        false
+    };
+    let centerline_changed =
+        if shape.centerline.is_none() || diagram_changed || configuration.normalized_dot_dirty {
+            recalculate_centerline(&mut shape, configuration);
+            true
+        } else {
+            false
+        };
+    let _centerline_changed = if shape.simplified_centerline.is_none()
+        || centerline_changed
+        || configuration.centerline_distance_dirty
+    {
+        simplify_centerline(&mut shape, configuration);
+        true
+    } else {
+        false
+    };
+
+    shape
+}
+
 /// Re-calculate voronoi diagram
-fn recalculate_voronoi_diagram(shared_data_bm: &mut RefMut<SharedData>)  {
+fn recalculate_voronoi_diagram(shape: &mut Shape, configuration: Configuration) {
+    let voronoi_input = shape.voronoi_input.take().unwrap();
+
+    let mut vb = Builder::<i32, f32, i64, f64>::new();
+
+    vb.with_segments(voronoi_input.iter()).expect("");
+
+    shape.voronoi_output = Some(vb.construct());
+    shape.voronoi_input = Some(voronoi_input);
 }
 
 /// Re-calculate centerline
-fn recalculate_centerline(shared_data_bm: &mut RefMut<SharedData>) {
+fn recalculate_centerline(shape: &mut Shape, configuration: Configuration) {
+    match shape.voronoi_output {
+        Some(Err(ref an_error)) => {
+            println!("Voronoi Error: {:?}", an_error);
+        }
+        Some(Ok(ref a)) => {
+            println!(
+                "blablablavb.construct().vertices.len() = {:?}",
+                a.vertices().len()
+            );
+        }
+        _ => (),
+    }
 }
+
+/// Re-calculate centerline
+fn simplify_centerline(shape: &mut Shape, configuration: Configuration) {}
 
 /// Re-calculate voronoi input geometry
 /// Todo: self intersection test -> fail
-fn recalculate_voronoi_input(shared_data_bm: &mut RefMut<SharedData>) {
-
-    let mut voronoi_input = shared_data_bm.voronoi_input.take().unwrap();
+fn recalculate_voronoi_input(shape: &mut Shape, configuration: Configuration) {
+    //let mut voronoi_input = shape.voronoi_input.take();
+    let mut voronoi_input = if shape.voronoi_input.is_some() {
+        shape.voronoi_input.take().unwrap()
+    } else {
+        Vec::<boostvoronoi::Line<i32>>::default()
+    };
     voronoi_input.clear();
 
-    for line_sets in shared_data_bm.raw_data.iter() {
-        for lines in line_sets.set().iter() {
-            let mut set = Vec::<boostvoronoi::Line<i64>>::with_capacity(lines.len());
-            if shared_data_bm.input_distance > 0.0 {
-                let before = lines.len();
-                let s_lines =
-                    lines.simplify((shared_data_bm.input_distance as f32) * 1024_f32.sqrt());
-                println!(
-                    "reduced by {} points of {} = {}",
-                    before - s_lines.len(),
-                    before,
-                    s_lines.len()
-                );
-                for lineseq in s_lines.as_lines().iter() {
-                    set.push(boostvoronoi::Line::new(
-                        boostvoronoi::Point {
-                            x: lineseq.start.x as i64,
-                            y: lineseq.start.y as i64,
-                        },
-                        boostvoronoi::Point {
-                            x: lineseq.end.x as i64,
-                            y: lineseq.end.y as i64,
-                        },
-                    ));
-                }
-            } else {
-                println!("no reduction");
-                for lineseq in lines.as_lines().iter() {
-                    set.push(boostvoronoi::Line::new(
-                        boostvoronoi::Point {
-                            x: lineseq.start.x as i64,
-                            y: lineseq.start.y as i64,
-                        },
-                        boostvoronoi::Point {
-                            x: lineseq.end.x as i64,
-                            y: lineseq.end.y as i64,
-                        },
-                    ))
-                }
-            };
-            println!("1set.len() {}", set.len());
-            voronoi_input.push(set);
-        }
+    for lines in shape.raw_data.set().iter() {
+        //let mut set = Vec::<boostvoronoi::Line<i64>>::with_capacity(lines.len());
+        if configuration.input_distance > 0.0 {
+            let before = lines.len();
+            let s_lines = lines.simplify((configuration.input_distance as f32) * 1024_f32.sqrt());
+            println!(
+                "reduced by {} points of {} = {}",
+                before - s_lines.len(),
+                before,
+                s_lines.len()
+            );
+            for lineseq in s_lines.as_lines().iter() {
+                voronoi_input.push(boostvoronoi::Line::new(
+                    boostvoronoi::Point {
+                        x: lineseq.start.x as i32,
+                        y: lineseq.start.y as i32,
+                    },
+                    boostvoronoi::Point {
+                        x: lineseq.end.x as i32,
+                        y: lineseq.end.y as i32,
+                    },
+                ));
+            }
+        } else {
+            println!("no reduction");
+            for lineseq in lines.as_lines().iter() {
+                voronoi_input.push(boostvoronoi::Line::new(
+                    boostvoronoi::Point {
+                        x: lineseq.start.x as i32,
+                        y: lineseq.start.y as i32,
+                    },
+                    boostvoronoi::Point {
+                        x: lineseq.end.x as i32,
+                        y: lineseq.end.y as i32,
+                    },
+                ))
+            }
+        };
+        println!("1set.len() {}", voronoi_input.len());
+        //voronoi_input.append(set);
     }
-    shared_data_bm.voronoi_input = Some(voronoi_input);
+    shape.voronoi_input = Some(voronoi_input);
 }
 
 /// Add data to the input lines.
@@ -353,65 +427,69 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
 
     let (_plane, transform) = get_transform(&total_aabb)?;
     // transform each linestring to 2d
-    let mut lines: Vec<LineStringSet2<f32>> = lines
+    let mut raw_data: Vec<LineStringSet2<f32>> = lines
         .iter()
         .map(|x| x.transform(&transform).copy_to_2d(cgmath_3d::Plane::XY))
         .collect();
-    data_bm.raw_data = lines;
 
-    println!("Started with {} shapes", data_bm.raw_data.len());
+    println!("Started with {} shapes", raw_data.len());
 
     // try to consolidate shapes. If one AABB (a) totally engulfs another shape (b)
     // we put shape (b) inside (a)
     'outer_loop: loop {
         // redo *every* test if something is changed until nothing else can be done
-        for i in 0..data_bm.raw_data.len() {
-            for j in i + 1..data_bm.raw_data.len() {
-                if data_bm.raw_data[i]
-                    .get_aabb()
-                    .contains_aabb(data_bm.raw_data[j].get_aabb())
-                {
+        for i in 0..raw_data.len() {
+            for j in i + 1..raw_data.len() {
+                if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb()) {
                     // move stuff from j to i via a temp
                     let mut line_j_steal = LineStringSet2::default();
                     {
-                        let line_j = data_bm.raw_data.get_mut(j).unwrap();
+                        let line_j = raw_data.get_mut(j).unwrap();
                         line_j_steal.take_from(line_j);
                     }
-                    let line_i = data_bm.raw_data.get_mut(i).unwrap();
+                    let line_i = raw_data.get_mut(i).unwrap();
 
                     line_i.take_from(&mut line_j_steal);
-                    let _ = data_bm.raw_data.remove(j);
+                    let _ = raw_data.remove(j);
                     continue 'outer_loop;
-                } else if data_bm.raw_data[j]
-                    .get_aabb()
-                    .contains_aabb(data_bm.raw_data[i].get_aabb())
-                {
+                } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb()) {
                     // move stuff from i to j via a temp
                     let mut line_i_steal = LineStringSet2::default();
                     {
-                        let line_i = data_bm.raw_data.get_mut(i).unwrap();
+                        let line_i = raw_data.get_mut(i).unwrap();
                         line_i_steal.take_from(line_i);
                     }
-                    let line_j = data_bm.raw_data.get_mut(j).unwrap();
+                    let line_j = raw_data.get_mut(j).unwrap();
 
                     line_j.take_from(&mut line_i_steal);
-                    let _ = data_bm.raw_data.remove(i);
+                    let _ = raw_data.remove(i);
                     continue 'outer_loop;
                 }
             }
         }
         break 'outer_loop;
     }
+    println!("Reduced to {} shapes", raw_data.len());
+    data_bm.shapes = Some(
+        raw_data
+            .into_iter()
+            .map(|x| Shape {
+                raw_data: x,
+                voronoi_input: None,
+                voronoi_output: None,
+                centerline: None,
+                simplified_centerline: None,
+            })
+            .collect(),
+    );
 
-    println!("Reduced to {} shapes", data_bm.raw_data.len());
-
-    let mut voronoi_input = data_bm.voronoi_input.take();
+    /*let mut voronoi_input = data_bm.voronoi_input.take();
     if let Some(mut voronoi_input) = voronoi_input {
         voronoi_input.clear();
         data_bm.voronoi_input = Some(voronoi_input);
     } else {
         data_bm.voronoi_input = voronoi_input;
-    }
+    }*/
 
     //data_bm.input_distance_dirty = true;
 
