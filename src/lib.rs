@@ -8,17 +8,32 @@
 #![feature(hash_drain_filter)]
 
 use boostvoronoi::builder as VB;
-use boostvoronoi::InputType;
-//use geo::{Coordinate, Line};
-//use intersect2d;
+use boostvoronoi::diagram as VD;
+use boostvoronoi::{BigFloatType, BigIntType, InputType, OutputType};
+
+use boostvoronoi::builder::Builder;
+use cgmath::{Point2, Point3};
+use fnv;
 use linestring::cgmath_2d;
+use linestring::cgmath_2d::Shape2d::Line;
+use linestring::cgmath_2d::{Line2, VoronoiParabolicArc};
 use linestring::cgmath_3d;
+use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
+use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::fmt::Display;
 use std::ops::Neg;
+use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
+
+const EXTERNAL_COLOR: u32 = 1;
 
 #[derive(Error, Debug)]
 pub enum CenterlineError {
+    #[error("Something is wrong with the internal logic")]
+    InternalError { txt: String },
+
     #[error("Something is wrong with the input data")]
     CouldNotCalculateInverseMatrix,
 
@@ -31,15 +46,14 @@ pub enum CenterlineError {
     #[error("Invalid data")]
     InvalidData,
 
-    //#[error(transparent)]
-    //IoRead(#[from]  std::io::Read),
+    #[error(transparent)]
+    BvError(#[from] boostvoronoi::BvError),
+
     #[error(transparent)]
     ObjError(#[from] obj::ObjError),
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
-    //#[error(transparent)]
-    //Intersect(#[from] intersect2d::Error),
 }
 
 #[derive(Debug)]
@@ -74,7 +88,7 @@ fn paint_vertex(vertices: &mut fnv::FnvHashMap<usize, Vertices>, vertex_id: usiz
 /// remove internal edges from a wavefront-obj object
 pub fn remove_internal_edges(
     obj: obj::raw::RawObj,
-) -> Result<Vec<cgmath_3d::LineStringSet3<f32>>, CenterlineError> {
+) -> Result<Vec<LineStringSet3<f32>>, CenterlineError> {
     for p in obj.points.iter() {
         // Ignore all points
         println!("Ignored point:{:?}", p);
@@ -249,7 +263,7 @@ pub fn remove_internal_edges(
     //dbg!(6);
     // now we have a list of groups of vertices, each group are connected by edges.
     // Create lists of linestrings3 by walking the edges of each vertex set.
-    let mut rv = Vec::<cgmath_3d::LineStringSet3<f32>>::with_capacity(shape_separation.len());
+    let mut rv = Vec::<LineStringSet3<f32>>::with_capacity(shape_separation.len());
 
     #[allow(unused_assignments)]
     for rvi in shape_separation.iter() {
@@ -278,10 +292,7 @@ pub fn remove_internal_edges(
                 ));
 
                 //assert_eq!(newV.edges.len(),2);
-                next = *current_vertex
-                    .edges
-                    .iter().find(|x| **x != prev)
-                    .unwrap();
+                next = *current_vertex.edges.iter().find(|x| **x != prev).unwrap();
 
                 //println!("current:{} prev:{} next:{} startedwith:{}", current, prev, next, started_with);
             } else {
@@ -309,4 +320,284 @@ pub fn remove_internal_edges(
     }
     //dbg!(10);
     Ok(rv)
+}
+
+pub struct Centerline<I1, F1, I2, F2>
+where
+    I1: InputType + Neg<Output = I1>,
+    F1: cgmath::BaseFloat + OutputType + Neg<Output = F1>,
+    I2: BigIntType + Neg<Output = I2>,
+    F2: BigFloatType + Neg<Output = F2>,
+{
+    // the input data to the voronoi diagram
+    pub segments: Vec<boostvoronoi::Line<I1>>,
+    // the voronoi diagram itself
+    pub diagram: Option<VD::VoronoiDiagram<I1, F1, I2, F2>>,
+    // rejected or already processed edges
+    rejected_edges: fnv::FnvHashSet<usize>,
+    // rejected or already processed vertices
+    rejected_vertices: fnv::FnvHashSet<usize>,
+    pub lines: Vec<Line3<F1>>,
+    pub arcs: Vec<VoronoiParabolicArc<F1>>,
+    pub linestrings: Vec<LineString3<F1>>,
+}
+
+impl<I1, F1, I2, F2> Centerline<I1, F1, I2, F2>
+where
+    I1: InputType + Neg<Output = I1>,
+    F1: cgmath::BaseFloat + OutputType + Neg<Output = F1>,
+    I2: BigIntType + Neg<Output = I2>,
+    F2: BigFloatType + Neg<Output = F2>,
+{
+    /// Creates a Centerline container with a set of segments
+    pub fn default() -> Self {
+        Self {
+            diagram: None,
+            segments: Vec::<boostvoronoi::Line<I1>>::default(),
+            rejected_edges: fnv::FnvHashSet::<usize>::default(),
+            rejected_vertices: fnv::FnvHashSet::<usize>::default(),
+            lines: Vec::<Line3<F1>>::new(),
+            linestrings: Vec::<LineString3<F1>>::new(),
+            arcs: Vec::<VoronoiParabolicArc<F1>>::new(),
+        }
+    }
+
+    /// Creates a Centerline container with a set of segments
+    pub fn with_segments(segments: Vec<boostvoronoi::Line<I1>>) -> Self {
+        Self {
+            diagram: None,
+            segments,
+            rejected_edges: fnv::FnvHashSet::<usize>::default(),
+            rejected_vertices: fnv::FnvHashSet::<usize>::default(),
+            lines: Vec::<Line3<F1>>::new(),
+            linestrings: Vec::<LineString3<F1>>::new(),
+            arcs: Vec::<VoronoiParabolicArc<F1>>::new(),
+        }
+    }
+
+    pub fn build_voronoi(&mut self) -> Result<(), CenterlineError> {
+        self.rejected_edges.clear();
+        self.rejected_vertices.clear();
+
+        let mut vb = Builder::new();
+        vb.with_segments(self.segments.iter())?;
+        let rv = vb.construct()?;
+        self.diagram = Some(rv);
+        Ok(())
+    }
+
+    pub fn calculate_centerline(&mut self) -> Result<(), CenterlineError> {
+        if self.diagram.is_none() {
+            return Err(CenterlineError::InternalError {
+                txt: "self.diagram was none".to_string(),
+            });
+        }
+
+        let diagram = self.diagram.take().unwrap();
+
+        self.reject_exterior(&diagram);
+        self.traverse_edges(&diagram);
+
+        self.diagram = Some(diagram);
+        Ok(())
+    }
+
+    pub fn retrieve_point(
+        diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>,
+        cell_id: VD::VoronoiCellIndex,
+        segments: &Vec<boostvoronoi::Line<I1>>,
+    ) -> boostvoronoi::Point<I1> {
+        let (index, category) = diagram.get_cell(cell_id).get().source_index_2();
+        match category {
+            VD::SourceCategory::SinglePoint => panic!("No points in the input data"),
+            VD::SourceCategory::SegmentStart => segments[index].start,
+            VD::SourceCategory::Segment | VD::SourceCategory::SegmentEnd => segments[index].end,
+        }
+    }
+
+    pub fn retrieve_segment(
+        diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>,
+        cell_id: VD::VoronoiCellIndex,
+        segments: &Vec<boostvoronoi::Line<I1>>,
+    ) -> boostvoronoi::Line<I1> {
+        let cell = diagram.get_cell(cell_id).get();
+        segments[cell.source_index()]
+    }
+
+    pub fn diagram(&self) -> Result<&VD::VoronoiDiagram<I1, F1, I2, F2>, CenterlineError> {
+        if let Some(ref diagram) = self.diagram {
+            Ok(diagram)
+        } else {
+            Err(CenterlineError::InternalError {
+                txt: "self.diagram was none".to_string(),
+            })
+        }
+    }
+
+    // Color exterior edges.
+    fn reject_exterior(&mut self, diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>) {
+        for it in diagram.edges().iter() {
+            let edge_id = Some(it.get().get_id());
+            if !diagram.edge_is_finite(edge_id).unwrap() {
+                self.color_exterior(diagram, edge_id);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn is_rejected_edge(
+        &self,
+        //rejected_edges: &fnv::FnvHashSet<usize>,
+        edge_id: Option<VD::VoronoiEdgeIndex>,
+    ) -> bool {
+        if let Some(edge_id) = edge_id {
+            return self.rejected_edges.contains(&edge_id.0);
+        }
+        false
+    }
+
+    #[inline(always)]
+    fn set_rejected_edge(&mut self, edge_id: Option<VD::VoronoiEdgeIndex>) {
+        if let Some(edge_id) = edge_id {
+            let _ = self.rejected_edges.insert(edge_id.0);
+        }
+    }
+
+    #[inline(always)]
+    fn is_exterior_vertex(
+        rejected_vertices: &mut fnv::FnvHashSet<usize>,
+        vertex_id: Option<VD::VoronoiEdgeIndex>,
+    ) -> bool {
+        if let Some(vertex_id) = vertex_id {
+            return rejected_vertices.contains(&vertex_id.0);
+        }
+        false
+    }
+
+    #[inline(always)]
+    fn set_exterior_vertex(&mut self, vertex_id: Option<VD::VoronoiVertexIndex>) {
+        if let Some(vertex_id) = vertex_id {
+            let _ = self.rejected_vertices.insert(vertex_id.0);
+        }
+    }
+
+    fn color_exterior(
+        &mut self,
+        diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>,
+        edge_id: Option<VD::VoronoiEdgeIndex>,
+    ) {
+        if edge_id.is_none() || self.is_rejected_edge(edge_id) {
+            return;
+        }
+        self.set_rejected_edge(edge_id);
+        // is this true?
+        self.set_rejected_edge(diagram.edge_get_twin(edge_id));
+        let v = diagram.edge_get_vertex1(edge_id);
+        if v.is_none() || !diagram.get_edge(edge_id.unwrap()).get().is_primary() {
+            return;
+        }
+        self.set_exterior_vertex(v);
+        let mut e = diagram.vertex_get_incident_edge(v);
+        let v_incident_edge = e;
+        while e.is_some() {
+            self.color_exterior(diagram, e);
+            e = diagram.edge_rot_next(e);
+            if e == v_incident_edge {
+                break;
+            }
+        }
+    }
+
+    /// move across each edge, and sample the edge
+    fn traverse_edges(&mut self, diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>) {
+        self.lines.clear();
+        self.arcs.clear();
+        self.linestrings.clear();
+        for it in diagram.edges().iter().enumerate() {
+            let edge_id = VD::VoronoiEdgeIndex(it.0);
+
+            let edge = it.1.get();
+            if !edge.is_primary() || self.is_rejected_edge(Some(edge_id)) {
+                continue;
+            }
+            let edge_twin_id = diagram.edge_get_twin(Some(edge_id));
+
+            if !diagram.edge_is_finite(Some(edge_id)).unwrap() {
+                println! {"Edge is NOT finite! {:?}", edge_id};
+                self.color_exterior(diagram, Some(edge_id));
+                continue;
+            } else {
+                let vertex0 = diagram.vertex_get(edge.vertex0()).unwrap().get();
+
+                let vertex1 = diagram.edge_get_vertex1(Some(edge_id));
+                let vertex1 = diagram.vertex_get(vertex1).unwrap().get();
+
+                let start_point = Point2 {
+                    x: vertex0.x(),
+                    y: vertex0.y(),
+                };
+                let end_point = Point2 {
+                    x: vertex1.x(),
+                    y: vertex1.y(),
+                };
+
+                if edge.is_curved() {
+                    let cell_id = diagram.edge_get_cell(Some(edge_id)).unwrap();
+                    let cell = diagram.get_cell(cell_id).get();
+
+                    let twin_id = diagram.edge_get_twin(Some(edge_id)).unwrap();
+                    let twin_cell_id = diagram.edge_get_cell(Some(twin_id)).unwrap();
+                    let cell_point = if cell.contains_point() {
+                        Self::retrieve_point(diagram, cell_id, &self.segments)
+                    } else {
+                        Self::retrieve_point(diagram, twin_cell_id, &self.segments)
+                    };
+                    let segment = if cell.contains_point() {
+                        Self::retrieve_segment(diagram, twin_cell_id, &self.segments)
+                    } else {
+                        Self::retrieve_segment(diagram, cell_id, &self.segments)
+                    };
+                    let arc = VoronoiParabolicArc::new(
+                        Line2 {
+                            start: Point2 {
+                                x: Self::i2f(segment.start.x),
+                                y: Self::i2f(segment.start.y),
+                            },
+                            end: Point2 {
+                                x: Self::i2f(segment.start.x),
+                                y: Self::i2f(segment.start.y),
+                            },
+                        },
+                        Point2 {
+                            x: Self::i2f(cell_point.x),
+                            y: Self::i2f(cell_point.y),
+                        },
+                        start_point,
+                        end_point,
+                    );
+                    self.arcs.push(arc);
+                } else {
+                    let line =  Line3 {
+                        start: Point3 {
+                            x: start_point.x,
+                            y: start_point.y,
+                            z: F1::zero(),
+                        },
+                        end: Point3 {
+                            x: end_point.x,
+                            y: end_point.y,
+                            z: F1::zero(),
+                        },
+                    };
+                    self.lines.push(line);
+                }
+                self.set_rejected_edge(edge_twin_id)
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn i2f(input: I1) -> F1 {
+        num::cast::<I1, F1>(input).unwrap()
+    }
 }

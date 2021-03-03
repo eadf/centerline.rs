@@ -48,6 +48,7 @@ use boostvoronoi::builder::Builder;
 use boostvoronoi::diagram::VoronoiDiagram;
 use boostvoronoi::BvError;
 
+use centerline::Centerline;
 use centerline::CenterlineError;
 use cgmath::SquareMatrix;
 use cgmath::Transform;
@@ -58,8 +59,10 @@ use fltk::*;
 use fltk::{app, draw::*, frame::*, window::*};
 
 use cgmath;
-use linestring::cgmath_2d::LineStringSet2;
+use linestring::cgmath_2d;
+use linestring::cgmath_2d::{Line2, LineString2, LineStringSet2};
 use linestring::cgmath_3d;
+use linestring::cgmath_3d::{Line3, LineString3};
 use obj;
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
@@ -67,6 +70,8 @@ use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
+//use std::borrow::BorrowMut;
+use std::sync::{Arc, RwLock};
 
 // frame size
 const HF: i32 = 590;
@@ -89,12 +94,10 @@ struct Shape {
     // but not simplified.
     raw_data: LineStringSet2<f32>,
 
-    // the simplified version of 'raw_data', also input to boost voronoi
-    voronoi_input: Option<Vec<boostvoronoi::Line<i32>>>,
-    // the unmodified voronoi output
-    voronoi_output: Option<Result<VoronoiDiagram<i32, f32, i64, f64>, BvError>>,
-    centerline: Option<bool>,
-    simplified_centerline: Option<bool>,
+    // centerline.segments is the simplified version of 'raw_data', also input to boost voronoi
+    centerline: Option<Centerline<i32, f32, i64, f64>>,
+
+    simplified_centerline: Option<Vec<LineString3<f32>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -150,7 +153,7 @@ fn main() -> Result<(), CenterlineError> {
     wind.set_color(Color::White);
     wind.end();
     wind.show();
-    let shared_data_rc = Rc::from(RefCell::from(SharedData {
+    let shared_data_rc = Rc::new(RefCell::new(SharedData {
         shapes: None,
         configuration: Configuration {
             window_center: (WF / 2, HF / 2),
@@ -204,7 +207,7 @@ fn main() -> Result<(), CenterlineError> {
     let shared_data_c = Rc::clone(&shared_data_rc);
     // This is called whenever the window is drawn and redrawn (in the event loop)
     wind.draw(move || {
-        let mut data_bm = shared_data_c.borrow_mut();
+        let mut data_bm: RefMut<_> = shared_data_c.borrow_mut();
 
         set_draw_color(Color::White);
         draw_rectf(5, 5, WF, HF);
@@ -214,21 +217,41 @@ fn main() -> Result<(), CenterlineError> {
         let opt_shapes = data_bm.shapes.take();
         if let Some(vec_shapes) = opt_shapes {
             for shape in vec_shapes.iter() {
-                //println!("2set.len() {}", shape.voronoi_input..len());
-                for a_line in shape.voronoi_input.iter().flatten() {
-                    // The scaling transform is already multiplied by 1024
-                    let x1 = (a_line.start.x >> 10) as i32 + data_bm.configuration.window_center.0;
-                    let y1 = (a_line.start.y >> 10) as i32 + data_bm.configuration.window_center.1;
-                    let x2 = (a_line.end.x >> 10) as i32 + data_bm.configuration.window_center.0;
-                    let y2 = (a_line.end.y >> 10) as i32 + data_bm.configuration.window_center.1;
-                    draw::draw_line(x1, y1, x2, y2);
-                    match data_bm.configuration.last_message {
-                        Some(GuiMessage::SliderPreChanged(_)) => {
-                            draw::draw_line(x1 - 2, y1 - 2, x1 + 2, y1 + 2);
-                            draw::draw_line(x1 + 2, y1 - 2, x1 - 2, y1 + 2);
+                if let Some(ref centerline) = shape.centerline {
+                    draw::set_draw_color(Color::Blue);
+                    for a_line in centerline.segments.iter() {
+                        // The scaling transform is already multiplied by 1024
+                        let x1 =
+                            (a_line.start.x >> 10) as i32 + data_bm.configuration.window_center.0;
+                        let y1 =
+                            (a_line.start.y >> 10) as i32 + data_bm.configuration.window_center.1;
+                        let x2 =
+                            (a_line.end.x >> 10) as i32 + data_bm.configuration.window_center.0;
+                        let y2 =
+                            (a_line.end.y >> 10) as i32 + data_bm.configuration.window_center.1;
+                        draw::draw_line(x1, y1, x2, y2);
+                        match data_bm.configuration.last_message {
+                            Some(GuiMessage::SliderPreChanged(_)) => {
+                                draw::draw_line(x1 - 2, y1 - 2, x1 + 2, y1 + 2);
+                                draw::draw_line(x1 + 2, y1 - 2, x1 - 2, y1 + 2);
+                            }
+                            _ => (),
                         }
-                        _ => (),
                     }
+                    draw::set_draw_color(Color::Red);
+                    for a_line in centerline.lines.iter() {
+                        // The scaling transform is already multiplied by 1024
+                        let x1 =
+                            ((a_line.start.x as i32)>> 10)  + data_bm.configuration.window_center.0;
+                        let y1 =
+                            ((a_line.start.y as i32)>> 10)  + data_bm.configuration.window_center.1;
+                        let x2 =
+                            ((a_line.end.x as i32)>> 10)  + data_bm.configuration.window_center.0;
+                        let y2 =
+                            ((a_line.end.y as i32)>> 10)  + data_bm.configuration.window_center.1;
+                        draw::draw_line(x1, y1, x2, y2);
+                    }
+                    println!("draw: {} lines", centerline.lines.len());
                 }
             }
             data_bm.shapes = Some(vec_shapes);
@@ -245,10 +268,10 @@ fn main() -> Result<(), CenterlineError> {
         _ => false,
     });
 
-    let shared_data_c = Rc::clone(&shared_data_rc);
+    let mut shared_data_c = Rc::clone(&shared_data_rc);
     while app.wait() {
         if let Some(msg) = receiver.recv() {
-            let mut shared_data_bm = shared_data_c.borrow_mut();
+            let mut shared_data_bm: RefMut<_> = shared_data_c.borrow_mut();
             match msg {
                 GuiMessage::SliderPreChanged(value) => {
                     shared_data_bm.configuration.input_distance = value;
@@ -264,7 +287,7 @@ fn main() -> Result<(), CenterlineError> {
                 }
             }
             shared_data_bm.configuration.last_message = Some(msg);
-            re_calculate(&mut shared_data_bm);
+            re_calculate(shared_data_bm);
             redraw();
         }
     }
@@ -273,13 +296,13 @@ fn main() -> Result<(), CenterlineError> {
 
 /// Re-calculate the center-line and all of the other parameters
 /// Todo: rayon the whole chain per shape
-fn re_calculate(shared_data_bm: &mut RefMut<SharedData>) {
+fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
     let shapes = shared_data_bm.shapes.take();
     let configuration = shared_data_bm.configuration.clone();
     if let Some(mut shapes) = shapes {
         shapes = shapes
             .into_iter() //into_par_iter()
-            .map(|x| re_calculate_m(x, configuration))
+            .map(|x| threaded_re_calculate(x, configuration))
             .collect();
         shared_data_bm.shapes = Some(shapes);
     }
@@ -290,14 +313,17 @@ fn re_calculate(shared_data_bm: &mut RefMut<SharedData>) {
 }
 
 /// This is what a single thread does in sequence
-fn re_calculate_m(mut shape: Shape, configuration: Configuration) -> Shape {
-    let input_changed = if shape.voronoi_input.is_none() || configuration.input_distance_dirty {
+fn threaded_re_calculate(mut shape: Shape, configuration: Configuration) -> Shape {
+    if shape.centerline.is_none() {
+        shape.centerline = Some(Centerline::<i32, f32, i64, f64>::default());
+    }
+    let input_changed = if configuration.input_distance_dirty {
         recalculate_voronoi_input(&mut shape, configuration);
         true
     } else {
         false
     };
-    let diagram_changed = if shape.voronoi_output.is_none() || input_changed {
+    let diagram_changed = if shape.centerline.is_none() || input_changed {
         recalculate_voronoi_diagram(&mut shape, configuration);
         true
     } else {
@@ -325,29 +351,27 @@ fn re_calculate_m(mut shape: Shape, configuration: Configuration) -> Shape {
 
 /// Re-calculate voronoi diagram
 fn recalculate_voronoi_diagram(shape: &mut Shape, configuration: Configuration) {
-    let voronoi_input = shape.voronoi_input.take().unwrap();
-
-    let mut vb = Builder::<i32, f32, i64, f64>::new();
-
-    vb.with_segments(voronoi_input.iter()).expect("");
-
-    shape.voronoi_output = Some(vb.construct());
-    shape.voronoi_input = Some(voronoi_input);
+    if let Some(mut centerline_rw) = shape.centerline.take() {
+        centerline_rw.build_voronoi();
+        shape.centerline = Some(centerline_rw);
+    }
 }
 
 /// Re-calculate centerline
 fn recalculate_centerline(shape: &mut Shape, configuration: Configuration) {
-    match shape.voronoi_output {
-        Some(Err(ref an_error)) => {
-            println!("Voronoi Error: {:?}", an_error);
-        }
-        Some(Ok(ref a)) => {
+    if let Some(ref mut  centerline) = shape.centerline {
+        if let Some(ref diagram) = centerline.diagram {
+            if let Err(e) = centerline.calculate_centerline() {
+                println!("Error: {:?}", e);
+            }
             println!(
-                "blablablavb.construct().vertices.len() = {:?}",
-                a.vertices().len()
+                "centerline.lines.len() = {:?}",
+                centerline.lines.len()
             );
         }
-        _ => (),
+    } else {
+        dbg!(shape.centerline.is_none());
+        println!("centerline was none");
     }
 }
 
@@ -357,60 +381,54 @@ fn simplify_centerline(shape: &mut Shape, configuration: Configuration) {}
 /// Re-calculate voronoi input geometry
 /// Todo: self intersection test -> fail
 fn recalculate_voronoi_input(shape: &mut Shape, configuration: Configuration) {
-    //let mut voronoi_input = shape.voronoi_input.take();
-    let mut voronoi_input = if shape.voronoi_input.is_some() {
-        shape.voronoi_input.take().unwrap()
-    } else {
-        Vec::<boostvoronoi::Line<i32>>::default()
-    };
-    voronoi_input.clear();
-
-    for lines in shape.raw_data.set().iter() {
-        //let mut set = Vec::<boostvoronoi::Line<i64>>::with_capacity(lines.len());
-        if configuration.input_distance > 0.0 {
-            let before = lines.len();
-            let s_lines = lines.simplify((configuration.input_distance as f32) * 1024_f32.sqrt());
-            println!(
-                "reduced by {} points of {} = {}",
-                before - s_lines.len(),
-                before,
-                s_lines.len()
-            );
-            for lineseq in s_lines.as_lines().iter() {
-                voronoi_input.push(boostvoronoi::Line::new(
-                    boostvoronoi::Point {
-                        x: lineseq.start.x as i32,
-                        y: lineseq.start.y as i32,
-                    },
-                    boostvoronoi::Point {
-                        x: lineseq.end.x as i32,
-                        y: lineseq.end.y as i32,
-                    },
-                ));
-            }
-        } else {
-            println!("no reduction");
-            for lineseq in lines.as_lines().iter() {
-                voronoi_input.push(boostvoronoi::Line::new(
-                    boostvoronoi::Point {
-                        x: lineseq.start.x as i32,
-                        y: lineseq.start.y as i32,
-                    },
-                    boostvoronoi::Point {
-                        x: lineseq.end.x as i32,
-                        y: lineseq.end.y as i32,
-                    },
-                ))
-            }
-        };
-        println!("1set.len() {}", voronoi_input.len());
-        //voronoi_input.append(set);
+    if let Some(mut centerline) = shape.centerline.take() {
+        for lines in shape.raw_data.set().iter() {
+            //let mut set = Vec::<boostvoronoi::Line<i64>>::with_capacity(lines.len());
+            if configuration.input_distance > 0.0 {
+                let before = lines.len();
+                let s_lines =
+                    lines.simplify((configuration.input_distance as f32) * 1024_f32.sqrt());
+                println!(
+                    "reduced by {} points of {} = {}",
+                    before - s_lines.len(),
+                    before,
+                    s_lines.len()
+                );
+                for lineseq in s_lines.as_lines().iter() {
+                    centerline.segments.push(boostvoronoi::Line::new(
+                        boostvoronoi::Point {
+                            x: lineseq.start.x as i32,
+                            y: lineseq.start.y as i32,
+                        },
+                        boostvoronoi::Point {
+                            x: lineseq.end.x as i32,
+                            y: lineseq.end.y as i32,
+                        },
+                    ));
+                }
+            } else {
+                println!("no reduction");
+                for lineseq in lines.as_lines().iter() {
+                    centerline.segments.push(boostvoronoi::Line::new(
+                        boostvoronoi::Point {
+                            x: lineseq.start.x as i32,
+                            y: lineseq.start.y as i32,
+                        },
+                        boostvoronoi::Point {
+                            x: lineseq.end.x as i32,
+                            y: lineseq.end.y as i32,
+                        },
+                    ))
+                }
+            };
+            println!("1set.len() {}", centerline.segments.len());
+        }
+        shape.centerline = Some(centerline);
     }
-    shape.voronoi_input = Some(voronoi_input);
 }
 
 /// Add data to the input lines.
-fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
+fn add_data(mut data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     let mut data_bm = data.borrow_mut();
 
     let obj_set = {
@@ -475,8 +493,6 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
             .into_iter()
             .map(|x| Shape {
                 raw_data: x,
-                voronoi_input: None,
-                voronoi_output: None,
                 centerline: None,
                 simplified_centerline: None,
             })

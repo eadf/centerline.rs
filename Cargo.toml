@@ -18,8 +18,7 @@ vec_map = "^0.8.2"
 num-bigint = "^0.3.1"
 num-traits = "^0.2.14"
 boostvoronoi = "^0.4.1"
-#boostvoronoi = {path = "../boostvoronoi.rs"}
-linestring = {version="^0.0.9", features = ["impl-cgmath"]}
+linestring = {version="^0.0.10",default-features=false,features=["impl-cgmath"]}
 #linestring = {path = "../linestring.rs", features = ["impl-cgmath"]}
 cgmath = "^0.18.0"
 approx = "^0.4.0"
@@ -30,6 +29,10 @@ rayon = "^1.5.0"
 [[example]]
 name = "fltk_gui"
 path = "example/fltk_gui.rs"
+
+[[example]]
+name = "cli"
+path = "example/cli.rs"
 
 [dev-dependencies]
 fltk = "^0.15.5"
