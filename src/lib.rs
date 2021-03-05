@@ -439,13 +439,13 @@ where
         for it in diagram.edges().iter() {
             let edge_id = Some(it.get().get_id());
             if !diagram.edge_is_finite(edge_id).unwrap() {
-                self.color_exterior(diagram, edge_id);
+                self.reject_edge(diagram, edge_id);
             }
         }
     }
 
     #[inline(always)]
-    fn is_rejected_edge(
+    fn is_edge_rejected(
         &self,
         //rejected_edges: &fnv::FnvHashSet<usize>,
         edge_id: Option<VD::VoronoiEdgeIndex>,
@@ -457,14 +457,14 @@ where
     }
 
     #[inline(always)]
-    fn set_rejected_edge(&mut self, edge_id: Option<VD::VoronoiEdgeIndex>) {
+    fn set_edge_rejected(&mut self, edge_id: Option<VD::VoronoiEdgeIndex>) {
         if let Some(edge_id) = edge_id {
             let _ = self.rejected_edges.insert(edge_id.0);
         }
     }
 
     #[inline(always)]
-    fn is_exterior_vertex(
+    fn is_vertex_rejected(
         rejected_vertices: &mut fnv::FnvHashSet<usize>,
         vertex_id: Option<VD::VoronoiEdgeIndex>,
     ) -> bool {
@@ -475,32 +475,34 @@ where
     }
 
     #[inline(always)]
-    fn set_exterior_vertex(&mut self, vertex_id: Option<VD::VoronoiVertexIndex>) {
+    fn set_vertex_rejected(&mut self, vertex_id: Option<VD::VoronoiVertexIndex>) {
         if let Some(vertex_id) = vertex_id {
             let _ = self.rejected_vertices.insert(vertex_id.0);
         }
     }
 
-    fn color_exterior(
+    /// Recursively marks this edge and all other edges connecting to it as rejected.
+    /// Recursion stops when connecting to input geometry.
+    fn reject_edge(
         &mut self,
         diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>,
         edge_id: Option<VD::VoronoiEdgeIndex>,
     ) {
-        if edge_id.is_none() || self.is_rejected_edge(edge_id) {
+        if edge_id.is_none() || self.is_edge_rejected(edge_id) {
             return;
         }
-        self.set_rejected_edge(edge_id);
-        // is this true?
-        self.set_rejected_edge(diagram.edge_get_twin(edge_id));
+        self.set_edge_rejected(edge_id);
+        // todo: is this correct?
+        self.set_edge_rejected(diagram.edge_get_twin(edge_id));
         let v = diagram.edge_get_vertex1(edge_id);
         if v.is_none() || !diagram.get_edge(edge_id.unwrap()).get().is_primary() {
             return;
         }
-        self.set_exterior_vertex(v);
+        self.set_vertex_rejected(v);
         let mut e = diagram.vertex_get_incident_edge(v);
         let v_incident_edge = e;
         while e.is_some() {
-            self.color_exterior(diagram, e);
+            self.reject_edge(diagram, e);
             e = diagram.edge_rot_next(e);
             if e == v_incident_edge {
                 break;
@@ -508,7 +510,7 @@ where
         }
     }
 
-    /// move across each edge, and sample the edge
+    /// move across each edge and sample the lines and arcs
     fn traverse_edges(&mut self, diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>) {
         self.lines.clear();
         self.arcs.clear();
@@ -517,14 +519,14 @@ where
             let edge_id = VD::VoronoiEdgeIndex(it.0);
 
             let edge = it.1.get();
-            if !edge.is_primary() || self.is_rejected_edge(Some(edge_id)) {
+            if !edge.is_primary() || self.is_edge_rejected(Some(edge_id)) {
                 continue;
             }
             let edge_twin_id = diagram.edge_get_twin(Some(edge_id));
 
             if !diagram.edge_is_finite(Some(edge_id)).unwrap() {
-                println! {"Edge is NOT finite! {:?}", edge_id};
-                self.color_exterior(diagram, Some(edge_id));
+                println! {"Error: Edge is NOT finite! {:?}", edge_id};
+                self.reject_edge(diagram, Some(edge_id));
                 continue;
             } else {
                 let vertex0 = diagram.vertex_get(edge.vertex0()).unwrap().get();
@@ -540,58 +542,92 @@ where
                     x: vertex1.x(),
                     y: vertex1.y(),
                 };
+                let cell_id = diagram.edge_get_cell(Some(edge_id)).unwrap();
+                let cell = diagram.get_cell(cell_id).get();
+                let twin_id = diagram.edge_get_twin(Some(edge_id)).unwrap();
+                let twin_cell_id = diagram.edge_get_cell(Some(twin_id)).unwrap();
+
+                let cell_point = if cell.contains_point() {
+                    Self::retrieve_point(diagram, cell_id, &self.segments)
+                } else {
+                    Self::retrieve_point(diagram, twin_cell_id, &self.segments)
+                };
+                let segment = if cell.contains_point() {
+                    Self::retrieve_segment(diagram, twin_cell_id, &self.segments)
+                } else {
+                    Self::retrieve_segment(diagram, cell_id, &self.segments)
+                };
+
+                let segment_start_point = Point2 {
+                    x: Self::i2f(segment.start.x),
+                    y: Self::i2f(segment.start.y),
+                };
+                let segment_end_point = Point2 {
+                    x: Self::i2f(segment.end.x),
+                    y: Self::i2f(segment.end.y),
+                };
+                let cell_point = Point2 {
+                    x: Self::i2f(cell_point.x),
+                    y: Self::i2f(cell_point.y),
+                };
+                let distance_to_start = linestring::cgmath_2d::distance_to_line_squared(
+                    &start_point,
+                    &segment_start_point,
+                    &segment_end_point,
+                )
+                .sqrt();
+                let distance_to_end = linestring::cgmath_2d::distance_to_line_squared(
+                    &end_point,
+                    &segment_start_point,
+                    &segment_end_point,
+                )
+                .sqrt();
 
                 if edge.is_curved() {
-                    let cell_id = diagram.edge_get_cell(Some(edge_id)).unwrap();
-                    let cell = diagram.get_cell(cell_id).get();
-
-                    let twin_id = diagram.edge_get_twin(Some(edge_id)).unwrap();
-                    let twin_cell_id = diagram.edge_get_cell(Some(twin_id)).unwrap();
-                    let cell_point = if cell.contains_point() {
-                        Self::retrieve_point(diagram, cell_id, &self.segments)
-                    } else {
-                        Self::retrieve_point(diagram, twin_cell_id, &self.segments)
-                    };
-                    let segment = if cell.contains_point() {
-                        Self::retrieve_segment(diagram, twin_cell_id, &self.segments)
-                    } else {
-                        Self::retrieve_segment(diagram, cell_id, &self.segments)
-                    };
                     let arc = VoronoiParabolicArc::new(
                         Line2 {
-                            start: Point2 {
-                                x: Self::i2f(segment.start.x),
-                                y: Self::i2f(segment.start.y),
-                            },
-                            end: Point2 {
-                                x: Self::i2f(segment.start.x),
-                                y: Self::i2f(segment.start.y),
-                            },
+                            start: segment_start_point,
+                            end: segment_end_point,
                         },
-                        Point2 {
-                            x: Self::i2f(cell_point.x),
-                            y: Self::i2f(cell_point.y),
-                        },
+                        cell_point,
                         start_point,
                         end_point,
                     );
                     self.arcs.push(arc);
                 } else {
-                    let line =  Line3 {
+                    // Edge is not curved
+
+                    if distance_to_start.ulps_eq(
+                        &F1::zero(),
+                        F1::default_epsilon(),
+                        F1::default_max_ulps(),
+                    ) {
+                        println!("distance is zero");
+                        continue;
+                    }
+                    if distance_to_end.ulps_eq(
+                        &F1::zero(),
+                        F1::default_epsilon(),
+                        F1::default_max_ulps(),
+                    ) {
+                        println!("distance is zero");
+                        continue;
+                    }
+                    let line = Line3 {
                         start: Point3 {
                             x: start_point.x,
                             y: start_point.y,
-                            z: F1::zero(),
+                            z: distance_to_start,
                         },
                         end: Point3 {
                             x: end_point.x,
                             y: end_point.y,
-                            z: F1::zero(),
+                            z: distance_to_end,
                         },
                     };
                     self.lines.push(line);
                 }
-                self.set_rejected_edge(edge_twin_id)
+                self.set_edge_rejected(edge_twin_id)
             }
         }
     }

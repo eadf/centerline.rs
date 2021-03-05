@@ -212,13 +212,12 @@ fn main() -> Result<(), CenterlineError> {
         set_draw_color(Color::White);
         draw_rectf(5, 5, WF, HF);
         set_line_style(LineStyle::Solid, 1);
-        draw::set_draw_color(Color::Blue);
 
         let opt_shapes = data_bm.shapes.take();
         if let Some(vec_shapes) = opt_shapes {
             for shape in vec_shapes.iter() {
                 if let Some(ref centerline) = shape.centerline {
-                    draw::set_draw_color(Color::Blue);
+                    draw::set_draw_color(Color::Black);
                     for a_line in centerline.segments.iter() {
                         // The scaling transform is already multiplied by 1024
                         let x1 =
@@ -250,6 +249,24 @@ fn main() -> Result<(), CenterlineError> {
                         let y2 =
                             ((a_line.end.y as i32)>> 10)  + data_bm.configuration.window_center.1;
                         draw::draw_line(x1, y1, x2, y2);
+                    }
+                    draw::set_draw_color(Color::Blue);
+                    for an_arc in centerline.arcs.iter() {
+                        //println!("an_arc start_point:{:?} end_point:{:?} cell_point:{:?} segment:{:?}", an_arc.start_point, an_arc.end_point, an_arc.cell_point, an_arc.segment);
+                        //let lines = an_arc.discretise_2d(1000.0);
+                        //println!("an_arc.len()={:?}", lines.points().len() );
+                        for a_line in an_arc.discretise_2d(1000.0).as_lines().iter() {
+                            // The scaling transform is already multiplied by 1024
+                            let x1 =
+                                ((a_line.start.x as i32) >> 10) + data_bm.configuration.window_center.0;
+                            let y1 =
+                                ((a_line.start.y as i32) >> 10) + data_bm.configuration.window_center.1;
+                            let x2 =
+                                ((a_line.end.x as i32) >> 10) + data_bm.configuration.window_center.0;
+                            let y2 =
+                                ((a_line.end.y as i32) >> 10) + data_bm.configuration.window_center.1;
+                            draw::draw_line(x1, y1, x2, y2);
+                        }
                     }
                     println!("draw: {} lines", centerline.lines.len());
                 }
@@ -297,6 +314,8 @@ fn main() -> Result<(), CenterlineError> {
 /// Re-calculate the center-line and all of the other parameters
 /// Todo: rayon the whole chain per shape
 fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
+    println!("***********************");
+    println!("re_calculate()");
     let shapes = shared_data_bm.shapes.take();
     let configuration = shared_data_bm.configuration.clone();
     if let Some(mut shapes) = shapes {
@@ -351,6 +370,7 @@ fn threaded_re_calculate(mut shape: Shape, configuration: Configuration) -> Shap
 
 /// Re-calculate voronoi diagram
 fn recalculate_voronoi_diagram(shape: &mut Shape, configuration: Configuration) {
+    println!("recalculate_voronoi_diagram()");
     if let Some(mut centerline_rw) = shape.centerline.take() {
         centerline_rw.build_voronoi();
         shape.centerline = Some(centerline_rw);
@@ -359,6 +379,7 @@ fn recalculate_voronoi_diagram(shape: &mut Shape, configuration: Configuration) 
 
 /// Re-calculate centerline
 fn recalculate_centerline(shape: &mut Shape, configuration: Configuration) {
+    println!("recalculate_centerline()");
     if let Some(ref mut  centerline) = shape.centerline {
         if let Some(ref diagram) = centerline.diagram {
             if let Err(e) = centerline.calculate_centerline() {
@@ -376,12 +397,16 @@ fn recalculate_centerline(shape: &mut Shape, configuration: Configuration) {
 }
 
 /// Re-calculate centerline
-fn simplify_centerline(shape: &mut Shape, configuration: Configuration) {}
+fn simplify_centerline(shape: &mut Shape, configuration: Configuration) {
+    println!("simplify_centerline()");
+}
 
 /// Re-calculate voronoi input geometry
 /// Todo: self intersection test -> fail
 fn recalculate_voronoi_input(shape: &mut Shape, configuration: Configuration) {
+    println!("recalculate_voronoi_input()");
     if let Some(mut centerline) = shape.centerline.take() {
+        centerline.segments.clear();
         for lines in shape.raw_data.set().iter() {
             //let mut set = Vec::<boostvoronoi::Line<i64>>::with_capacity(lines.len());
             if configuration.input_distance > 0.0 {
