@@ -70,8 +70,6 @@ use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
-//use std::borrow::BorrowMut;
-use std::sync::{Arc, RwLock};
 
 // frame size
 const HF: i32 = 590;
@@ -241,13 +239,13 @@ fn main() -> Result<(), CenterlineError> {
                     for a_line in centerline.lines.iter() {
                         // The scaling transform is already multiplied by 1024
                         let x1 =
-                            ((a_line.start.x as i32)>> 10)  + data_bm.configuration.window_center.0;
+                            ((a_line.start.x as i32) >> 10) + data_bm.configuration.window_center.0;
                         let y1 =
-                            ((a_line.start.y as i32)>> 10)  + data_bm.configuration.window_center.1;
+                            ((a_line.start.y as i32) >> 10) + data_bm.configuration.window_center.1;
                         let x2 =
-                            ((a_line.end.x as i32)>> 10)  + data_bm.configuration.window_center.0;
+                            ((a_line.end.x as i32) >> 10) + data_bm.configuration.window_center.0;
                         let y2 =
-                            ((a_line.end.y as i32)>> 10)  + data_bm.configuration.window_center.1;
+                            ((a_line.end.y as i32) >> 10) + data_bm.configuration.window_center.1;
                         draw::draw_line(x1, y1, x2, y2);
                     }
                     draw::set_draw_color(Color::Blue);
@@ -257,14 +255,14 @@ fn main() -> Result<(), CenterlineError> {
                         //println!("an_arc.len()={:?}", lines.points().len() );
                         for a_line in an_arc.discretise_2d(1000.0).as_lines().iter() {
                             // The scaling transform is already multiplied by 1024
-                            let x1 =
-                                ((a_line.start.x as i32) >> 10) + data_bm.configuration.window_center.0;
-                            let y1 =
-                                ((a_line.start.y as i32) >> 10) + data_bm.configuration.window_center.1;
-                            let x2 =
-                                ((a_line.end.x as i32) >> 10) + data_bm.configuration.window_center.0;
-                            let y2 =
-                                ((a_line.end.y as i32) >> 10) + data_bm.configuration.window_center.1;
+                            let x1 = ((a_line.start.x as i32) >> 10)
+                                + data_bm.configuration.window_center.0;
+                            let y1 = ((a_line.start.y as i32) >> 10)
+                                + data_bm.configuration.window_center.1;
+                            let x2 = ((a_line.end.x as i32) >> 10)
+                                + data_bm.configuration.window_center.0;
+                            let y2 = ((a_line.end.y as i32) >> 10)
+                                + data_bm.configuration.window_center.1;
                             draw::draw_line(x1, y1, x2, y2);
                         }
                     }
@@ -285,7 +283,7 @@ fn main() -> Result<(), CenterlineError> {
         _ => false,
     });
 
-    let mut shared_data_c = Rc::clone(&shared_data_rc);
+    let shared_data_c = Rc::clone(&shared_data_rc);
     while app.wait() {
         if let Some(msg) = receiver.recv() {
             let mut shared_data_bm: RefMut<_> = shared_data_c.borrow_mut();
@@ -321,7 +319,8 @@ fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
     if let Some(mut shapes) = shapes {
         shapes = shapes
             .into_iter() //into_par_iter()
-            .map(|x| threaded_re_calculate(x, configuration))
+            .filter_map(|x| threaded_re_calculate_error_handler(x, configuration))
+            //.filter(|x| x.is_some())
             .collect();
         shared_data_bm.shapes = Some(shapes);
     }
@@ -331,26 +330,43 @@ fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
     redraw();
 }
 
+fn threaded_re_calculate_error_handler(
+    shape: Shape,
+    configuration: Configuration,
+) -> Option<Shape> {
+    let rv = threaded_re_calculate(shape, configuration);
+    match rv {
+        Err(e) => {
+            println!("Error {:?}", e);
+            None
+        }
+        Ok(shape) => Some(shape),
+    }
+}
+
 /// This is what a single thread does in sequence
-fn threaded_re_calculate(mut shape: Shape, configuration: Configuration) -> Shape {
+fn threaded_re_calculate(
+    mut shape: Shape,
+    configuration: Configuration,
+) -> Result<Shape, CenterlineError> {
     if shape.centerline.is_none() {
         shape.centerline = Some(Centerline::<i32, f32, i64, f64>::default());
     }
     let input_changed = if configuration.input_distance_dirty {
-        recalculate_voronoi_input(&mut shape, configuration);
+        recalculate_voronoi_input(&mut shape, configuration)?;
         true
     } else {
         false
     };
     let diagram_changed = if shape.centerline.is_none() || input_changed {
-        recalculate_voronoi_diagram(&mut shape, configuration);
+        recalculate_voronoi_diagram(&mut shape, configuration)?;
         true
     } else {
         false
     };
     let centerline_changed =
         if shape.centerline.is_none() || diagram_changed || configuration.normalized_dot_dirty {
-            recalculate_centerline(&mut shape, configuration);
+            recalculate_centerline(&mut shape, configuration)?;
             true
         } else {
             false
@@ -359,51 +375,58 @@ fn threaded_re_calculate(mut shape: Shape, configuration: Configuration) -> Shap
         || centerline_changed
         || configuration.centerline_distance_dirty
     {
-        simplify_centerline(&mut shape, configuration);
+        simplify_centerline(&mut shape, configuration)?;
         true
     } else {
         false
     };
 
-    shape
+    Ok(shape)
 }
 
 /// Re-calculate voronoi diagram
-fn recalculate_voronoi_diagram(shape: &mut Shape, configuration: Configuration) {
+fn recalculate_voronoi_diagram(
+    shape: &mut Shape,
+    configuration: Configuration,
+) -> Result<(), CenterlineError> {
     println!("recalculate_voronoi_diagram()");
     if let Some(mut centerline_rw) = shape.centerline.take() {
-        centerline_rw.build_voronoi();
+        centerline_rw.build_voronoi()?;
         shape.centerline = Some(centerline_rw);
     }
+    Ok(())
 }
 
 /// Re-calculate centerline
-fn recalculate_centerline(shape: &mut Shape, configuration: Configuration) {
+fn recalculate_centerline(
+    shape: &mut Shape,
+    configuration: Configuration,
+) -> Result<(), CenterlineError> {
     println!("recalculate_centerline()");
-    if let Some(ref mut  centerline) = shape.centerline {
+    if let Some(ref mut centerline) = shape.centerline {
         if let Some(ref diagram) = centerline.diagram {
-            if let Err(e) = centerline.calculate_centerline() {
-                println!("Error: {:?}", e);
-            }
-            println!(
-                "centerline.lines.len() = {:?}",
-                centerline.lines.len()
-            );
+            centerline.calculate_centerline()?;
+            println!("centerline.lines.len() = {:?}", centerline.lines.len());
         }
     } else {
         dbg!(shape.centerline.is_none());
         println!("centerline was none");
     }
+    Ok(())
 }
 
 /// Re-calculate centerline
-fn simplify_centerline(shape: &mut Shape, configuration: Configuration) {
+fn simplify_centerline(shape: &mut Shape, configuration: Configuration)-> Result<(),CenterlineError> {
     println!("simplify_centerline()");
+    Ok(())
 }
 
 /// Re-calculate voronoi input geometry
 /// Todo: self intersection test -> fail
-fn recalculate_voronoi_input(shape: &mut Shape, configuration: Configuration) {
+fn recalculate_voronoi_input(
+    shape: &mut Shape,
+    configuration: Configuration,
+) -> Result<(), CenterlineError> {
     println!("recalculate_voronoi_input()");
     if let Some(mut centerline) = shape.centerline.take() {
         centerline.segments.clear();
@@ -450,10 +473,11 @@ fn recalculate_voronoi_input(shape: &mut Shape, configuration: Configuration) {
         }
         shape.centerline = Some(centerline);
     }
+    Ok(())
 }
 
 /// Add data to the input lines.
-fn add_data(mut data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
+fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     let mut data_bm = data.borrow_mut();
 
     let obj_set = {
@@ -461,7 +485,7 @@ fn add_data(mut data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
         obj::raw::parse_obj(input)?
     };
 
-    let mut lines = centerline::remove_internal_edges(obj_set)?;
+    let lines = centerline::remove_internal_edges(obj_set)?;
     let mut total_aabb = cgmath_3d::Aabb3::default();
     for l in lines.iter() {
         total_aabb.update_aabb(l.get_aabb());
