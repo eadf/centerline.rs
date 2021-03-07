@@ -9,13 +9,11 @@
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;
-use boostvoronoi::{BigFloatType, BigIntType, InputType, OutputType};
+use boostvoronoi::{BigFloatType, BigIntType, InputType, OutputType, TypeConverter};
 
 use boostvoronoi::builder::Builder;
-use cgmath::{Point2, Point3};
-use fnv;
+use cgmath::InnerSpace;
 use linestring::cgmath_2d;
-use linestring::cgmath_2d::Shape2d::Line;
 use linestring::cgmath_2d::{Line2, VoronoiParabolicArc};
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
@@ -27,7 +25,8 @@ use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
-const EXTERNAL_COLOR: u32 = 1;
+#[macro_use]
+extern crate bitflags;
 
 #[derive(Error, Debug)]
 pub enum CenterlineError {
@@ -54,6 +53,20 @@ pub enum CenterlineError {
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
+}
+
+bitflags! {
+    /// bit field defining various reasons for edge/vertex rejection
+    pub struct ColorFlag: VD::ColorType {
+        /// Edge is directly or indirectly connected to an INFINITE edge
+        const EXTERNAL     = 0b00000001;
+        /// Edge is secondary
+        const SECONDARY    = 0b00000010;
+        /// Edge has only one vertex
+        const INFINITE     = 0b00000100;
+        /// Edge does not pass the normalized edge<->segment dot product test
+        const DOTLIMIT     = 0b00001000;
+    }
 }
 
 #[derive(Debug)]
@@ -332,14 +345,15 @@ where
     // the input data to the voronoi diagram
     pub segments: Vec<boostvoronoi::Line<I1>>,
     // the voronoi diagram itself
-    pub diagram: Option<VD::VoronoiDiagram<I1, F1, I2, F2>>,
+    pub diagram: VD::VoronoiDiagram<I1, F1, I2, F2>,
     // rejected or already processed edges
-    rejected_edges: fnv::FnvHashSet<usize>,
+    //rejected_edges: fnv::FnvHashSet<usize>,
     // rejected or already processed vertices
-    rejected_vertices: fnv::FnvHashSet<usize>,
+    //rejected_vertices: fnv::FnvHashSet<usize>,
     pub lines: Vec<Line3<F1>>,
     pub arcs: Vec<VoronoiParabolicArc<F1>>,
     pub linestrings: Vec<LineString3<F1>>,
+    ignored_edges: Option<fnv::FnvHashSet<usize>>,
 }
 
 impl<I1, F1, I2, F2> Centerline<I1, F1, I2, F2>
@@ -352,158 +366,263 @@ where
     /// Creates a Centerline container with a set of segments
     pub fn default() -> Self {
         Self {
-            diagram: None,
+            diagram: VD::VoronoiDiagram::default(),
             segments: Vec::<boostvoronoi::Line<I1>>::default(),
-            rejected_edges: fnv::FnvHashSet::<usize>::default(),
-            rejected_vertices: fnv::FnvHashSet::<usize>::default(),
             lines: Vec::<Line3<F1>>::new(),
             linestrings: Vec::<LineString3<F1>>::new(),
             arcs: Vec::<VoronoiParabolicArc<F1>>::new(),
+            ignored_edges: Some(fnv::FnvHashSet::<usize>::default()),
         }
     }
 
     /// Creates a Centerline container with a set of segments
     pub fn with_segments(segments: Vec<boostvoronoi::Line<I1>>) -> Self {
         Self {
-            diagram: None,
+            diagram: VD::VoronoiDiagram::default(),
             segments,
-            rejected_edges: fnv::FnvHashSet::<usize>::default(),
-            rejected_vertices: fnv::FnvHashSet::<usize>::default(),
             lines: Vec::<Line3<F1>>::new(),
             linestrings: Vec::<LineString3<F1>>::new(),
             arcs: Vec::<VoronoiParabolicArc<F1>>::new(),
+            ignored_edges: Some(fnv::FnvHashSet::<usize>::default()),
         }
     }
 
     pub fn build_voronoi(&mut self) -> Result<(), CenterlineError> {
-        self.rejected_edges.clear();
-        self.rejected_vertices.clear();
+        // drawn_edges should always be Some when this method runs
+        self.ignored_edges.as_mut().unwrap().clear();
 
         let mut vb = Builder::new();
         vb.with_segments(self.segments.iter())?;
-        let rv = vb.construct()?;
-        self.diagram = Some(rv);
+        self.diagram = vb.construct()?;
+        self.reject_exterior();
         Ok(())
     }
 
-    pub fn calculate_centerline(&mut self) -> Result<(), CenterlineError> {
-        if self.diagram.is_none() {
-            return Err(CenterlineError::InternalError {
-                txt: "self.diagram was none".to_string(),
-            });
-        }
-
-        let diagram = self.diagram.take().unwrap();
-
-        self.reject_exterior(&diagram);
-        self.traverse_edges(&diagram);
-
-        self.diagram = Some(diagram);
+    pub fn calculate_centerline(&mut self, dot_limit: F1) -> Result<(), CenterlineError> {
+        self.normalized_dot_test(dot_limit);
+        self.traverse_edges();
         Ok(())
     }
 
-    pub fn retrieve_point(
-        diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>,
-        cell_id: VD::VoronoiCellIndex,
-        segments: &Vec<boostvoronoi::Line<I1>>,
-    ) -> boostvoronoi::Point<I1> {
-        let (index, category) = diagram.get_cell(cell_id).get().source_index_2();
+    pub fn retrieve_point(&self, cell_id: VD::VoronoiCellIndex) -> boostvoronoi::Point<I1> {
+        let (index, category) = self.diagram.get_cell(cell_id).get().source_index_2();
         match category {
             VD::SourceCategory::SinglePoint => panic!("No points in the input data"),
-            VD::SourceCategory::SegmentStart => segments[index].start,
-            VD::SourceCategory::Segment | VD::SourceCategory::SegmentEnd => segments[index].end,
-        }
-    }
-
-    pub fn retrieve_segment(
-        diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>,
-        cell_id: VD::VoronoiCellIndex,
-        segments: &Vec<boostvoronoi::Line<I1>>,
-    ) -> boostvoronoi::Line<I1> {
-        let cell = diagram.get_cell(cell_id).get();
-        segments[cell.source_index()]
-    }
-
-    pub fn diagram(&self) -> Result<&VD::VoronoiDiagram<I1, F1, I2, F2>, CenterlineError> {
-        if let Some(ref diagram) = self.diagram {
-            Ok(diagram)
-        } else {
-            Err(CenterlineError::InternalError {
-                txt: "self.diagram was none".to_string(),
-            })
-        }
-    }
-
-    // Color exterior edges.
-    fn reject_exterior(&mut self, diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>) {
-        for it in diagram.edges().iter() {
-            let edge_id = Some(it.get().get_id());
-            if !diagram.edge_is_finite(edge_id).unwrap() {
-                self.reject_edge(diagram, edge_id);
+            VD::SourceCategory::SegmentStart => self.segments[index].start,
+            VD::SourceCategory::Segment | VD::SourceCategory::SegmentEnd => {
+                self.segments[index].end
             }
         }
     }
 
-    #[inline(always)]
-    fn is_edge_rejected(
+    pub fn retrieve_segment(&self, cell_id: VD::VoronoiCellIndex) -> boostvoronoi::Line<I1> {
+        let cell = self.diagram.get_cell(cell_id).get();
+        self.segments[cell.source_index()]
+    }
+
+    pub fn diagram(&self) -> &VD::VoronoiDiagram<I1, F1, I2, F2> {
+        &self.diagram
+    }
+
+    /// Color exterior edges.
+    fn reject_exterior(&self) {
+        for it in self.diagram.edges().iter() {
+            let edge_id = Some(it.get().get_id());
+            if !self.diagram.edge_is_finite(edge_id).unwrap() {
+                self.recursive_reject_edge(edge_id, ColorFlag::EXTERNAL);
+                self.diagram
+                    .edge_or_color(edge_id, ColorFlag::INFINITE.bits);
+            }
+        }
+    }
+
+    /// Reject edges that does not pass the dot limit test.
+    /// It iterates over all cells, looking for vertices that are identical to the
+    /// input segment endpoints.
+    /// It then look at edges connected to that vertex and test if the dot product
+    /// between the normalized segment vector and normalized edge vector exceeds
+    /// a predefined value.
+    /// TODO: there must be a quicker way to get this information from the voronoi diagram
+    /// maybe mark each vertex identical to input points..
+    fn normalized_dot_test(&mut self, dot_limit: F1) {
+        println!("normalized_dot_test");
+        let mut ignored_edges = self.ignored_edges.take().unwrap();
+        ignored_edges.clear();
+
+        for (c_id, cell) in self.diagram.cells().iter().enumerate() {
+            let cell_c = cell.get();
+            assert_eq!(c_id, cell_c.get_id());
+            if !cell_c.contains_segment() {
+                continue;
+            }
+            let segment = self.retrieve_segment(VD::VoronoiCellIndex(c_id));
+            let point0 = cgmath::Point2 {
+                x: Self::i2f(segment.start.x),
+                y: Self::i2f(segment.start.y),
+            };
+            let point1 = cgmath::Point2 {
+                x: Self::i2f(segment.end.x),
+                y: Self::i2f(segment.end.y),
+            };
+
+            if let Some(incident_e) = cell_c.get_incident_edge() {
+                //println!("incident_e {:?}", incident_e);
+                let mut e = Some(incident_e);
+                loop {
+                    e = self.diagram.get_edge(e.unwrap()).get().next();
+
+                    if !self.is_edge_rejected_2(e, &ignored_edges) {
+                        // all infinite edges should be rejected at this point, so
+                        // all edges should contain a vertex0 and vertex1
+
+                        let vertex0 = self.diagram.edge_get_vertex0(e);
+                        if let Some(vertex0) = self.diagram.vertex_get(vertex0) {
+                            let vertex0 = vertex0.get();
+                            let vertex0 = cgmath::Point2 {
+                                x: vertex0.x(),
+                                y: vertex0.y(),
+                            };
+                            let vertex1 = self.diagram.edge_get_vertex1(e);
+                            if let Some(vertex1) = self.diagram.vertex_get(vertex1) {
+                                let vertex1 = vertex1.get();
+                                let vertex1 = cgmath::Point2 {
+                                    x: vertex1.x(),
+                                    y: vertex1.y(),
+                                };
+                                let _ = self.normalized_dot_test_6(
+                                    dot_limit,
+                                    &mut ignored_edges,
+                                    e,
+                                    &vertex0,
+                                    &vertex1,
+                                    &point0,
+                                    &point1,
+                                ) || self.normalized_dot_test_6(
+                                    dot_limit,
+                                    &mut ignored_edges,
+                                    e,
+                                    &vertex0,
+                                    &vertex1,
+                                    &point1,
+                                    &point0,
+                                ) || self.normalized_dot_test_6(
+                                    dot_limit,
+                                    &mut ignored_edges,
+                                    e,
+                                    &vertex1,
+                                    &vertex0,
+                                    &point0,
+                                    &point1,
+                                ) || self.normalized_dot_test_6(
+                                    dot_limit,
+                                    &mut ignored_edges,
+                                    e,
+                                    &vertex1,
+                                    &vertex0,
+                                    &point1,
+                                    &point0,
+                                );
+                            }
+                        }
+                    }
+                    if e.is_none() || e.unwrap() == incident_e {
+                        break;
+                    }
+                }
+            }
+        }
+        self.ignored_edges = Some(ignored_edges);
+    }
+
+    /// set the edge as rejected in the hashmap if it fails the dot test
+    #[allow(clippy::too_many_arguments)]
+    fn normalized_dot_test_6(
         &self,
-        //rejected_edges: &fnv::FnvHashSet<usize>,
+        dot_limit: F1,
+        ignored_edges: &mut fnv::FnvHashSet<usize>,
+        edge: Option<VD::VoronoiEdgeIndex>,
+        vertex0: &cgmath::Point2<F1>,
+        vertex1: &cgmath::Point2<F1>,
+        s_point_0: &cgmath::Point2<F1>,
+        s_point_1: &cgmath::Point2<F1>,
+    ) -> bool {
+        if approx::ulps_eq!(vertex0.x, s_point_0.x) && approx::ulps_eq!(vertex0.y, s_point_0.y) {
+            // todo better to compare to the square of the dot product, fewer operations.
+            let segment_v = (s_point_1 - s_point_0).normalize();
+            let vertex_v = (vertex1 - vertex0).normalize();
+            let dot_product = segment_v.dot(vertex_v).abs();
+            if dot_product < dot_limit {
+                if let Some(twin) = self.diagram.edge_get_twin(edge) {
+                    let _ = ignored_edges.insert(twin.0);
+                }
+                if let Some(edge) = edge {
+                    let _ = ignored_edges.insert(edge.0);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// check if an edge is rejected based on the color value
+    #[inline(always)]
+    fn is_edge_rejected(&self, edge_id: Option<VD::VoronoiEdgeIndex>) -> bool {
+        self.diagram
+            .edge_get_color(edge_id)
+            .map_or(true, |x| x != 0)
+    }
+
+    /// check if an edge is rejected based on the color value and the ignored_edges hashmap
+    #[inline(always)]
+    fn is_edge_rejected_2(
+        &self,
         edge_id: Option<VD::VoronoiEdgeIndex>,
+        ignored_edges: &fnv::FnvHashSet<usize>,
     ) -> bool {
-        if let Some(edge_id) = edge_id {
-            return self.rejected_edges.contains(&edge_id.0);
-        }
-        false
-    }
-
-    #[inline(always)]
-    fn set_edge_rejected(&mut self, edge_id: Option<VD::VoronoiEdgeIndex>) {
-        if let Some(edge_id) = edge_id {
-            let _ = self.rejected_edges.insert(edge_id.0);
+        if let Some(edge_id_u) = edge_id {
+            self.is_edge_rejected(edge_id) || ignored_edges.contains(&edge_id_u.0)
+        } else {
+            true
         }
     }
 
+    /// Set the color value of the edge
     #[inline(always)]
-    fn is_vertex_rejected(
-        rejected_vertices: &mut fnv::FnvHashSet<usize>,
-        vertex_id: Option<VD::VoronoiEdgeIndex>,
-    ) -> bool {
-        if let Some(vertex_id) = vertex_id {
-            return rejected_vertices.contains(&vertex_id.0);
-        }
-        false
+    fn reject_edge(&self, edge_id: Option<VD::VoronoiEdgeIndex>, color: ColorFlag) {
+        self.diagram.edge_or_color(edge_id, color.bits);
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    fn is_vertex_rejected(&self, vertex_id: Option<VD::VoronoiVertexIndex>) -> bool {
+        self.diagram
+            .vertex_get_color(vertex_id)
+            .map_or(true, |x| x != 0)
     }
 
     #[inline(always)]
-    fn set_vertex_rejected(&mut self, vertex_id: Option<VD::VoronoiVertexIndex>) {
-        if let Some(vertex_id) = vertex_id {
-            let _ = self.rejected_vertices.insert(vertex_id.0);
-        }
+    fn reject_vertex(&self, vertex_id: Option<VD::VoronoiVertexIndex>, color: ColorFlag) {
+        self.diagram.vertex_or_color(vertex_id, color.bits);
     }
 
     /// Recursively marks this edge and all other edges connecting to it as rejected.
     /// Recursion stops when connecting to input geometry.
-    fn reject_edge(
-        &mut self,
-        diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>,
-        edge_id: Option<VD::VoronoiEdgeIndex>,
-    ) {
+    fn recursive_reject_edge(&self, edge_id: Option<VD::VoronoiEdgeIndex>, color: ColorFlag) {
         if edge_id.is_none() || self.is_edge_rejected(edge_id) {
             return;
         }
-        self.set_edge_rejected(edge_id);
-        // todo: is this correct?
-        self.set_edge_rejected(diagram.edge_get_twin(edge_id));
-        let v = diagram.edge_get_vertex1(edge_id);
-        if v.is_none() || !diagram.get_edge(edge_id.unwrap()).get().is_primary() {
+        self.reject_edge(edge_id, color);
+        self.reject_edge(self.diagram.edge_get_twin(edge_id), color);
+        let v = self.diagram.edge_get_vertex1(edge_id);
+        if v.is_none() || !self.diagram.get_edge(edge_id.unwrap()).get().is_primary() {
             return;
         }
-        self.set_vertex_rejected(v);
-        let mut e = diagram.vertex_get_incident_edge(v);
+        self.reject_vertex(v, color);
+        let mut e = self.diagram.vertex_get_incident_edge(v);
         let v_incident_edge = e;
         while e.is_some() {
-            self.reject_edge(diagram, e);
-            e = diagram.edge_rot_next(e);
+            self.recursive_reject_edge(e, color);
+            e = self.diagram.edge_rot_next(e);
             if e == v_incident_edge {
                 break;
             }
@@ -511,62 +630,72 @@ where
     }
 
     /// move across each edge and sample the lines and arcs
-    fn traverse_edges(&mut self, diagram: &VD::VoronoiDiagram<I1, F1, I2, F2>) {
+    fn traverse_edges(&mut self) {
         self.lines.clear();
         self.arcs.clear();
         self.linestrings.clear();
-        for it in diagram.edges().iter().enumerate() {
+        let mut ignored_edges = self.ignored_edges.take().unwrap();
+
+        for it in self.diagram.edges().iter().enumerate() {
             let edge_id = VD::VoronoiEdgeIndex(it.0);
 
             let edge = it.1.get();
-            if !edge.is_primary() || self.is_edge_rejected(Some(edge_id)) {
+            if ignored_edges.contains(&edge_id.0) {
                 continue;
             }
-            let edge_twin_id = diagram.edge_get_twin(Some(edge_id));
+            if !edge.is_primary() || self.is_edge_rejected_2(Some(edge_id), &ignored_edges) {
+                let _ = ignored_edges.insert(edge_id.0);
+                continue;
+            }
+            let edge_twin_id = self.diagram.edge_get_twin(Some(edge_id));
 
-            if !diagram.edge_is_finite(Some(edge_id)).unwrap() {
+            if !self.diagram.edge_is_finite(Some(edge_id)).unwrap() {
+                // This should not happen, this edge should already have been filtered out
                 println! {"Error: Edge is NOT finite! {:?}", edge_id};
-                self.reject_edge(diagram, Some(edge_id));
+                self.reject_edge(Some(edge_id), ColorFlag::INFINITE);
+                self.recursive_reject_edge(Some(edge_id), ColorFlag::EXTERNAL);
+                let _ = ignored_edges.insert(edge_id.0);
                 continue;
             } else {
-                let vertex0 = diagram.vertex_get(edge.vertex0()).unwrap().get();
+                // Edge is finite so we know that vertex0 and vertex1 is_some()
+                let vertex0 = self.diagram.vertex_get(edge.vertex0()).unwrap().get();
 
-                let vertex1 = diagram.edge_get_vertex1(Some(edge_id));
-                let vertex1 = diagram.vertex_get(vertex1).unwrap().get();
+                let vertex1 = self.diagram.edge_get_vertex1(Some(edge_id));
+                let vertex1 = self.diagram.vertex_get(vertex1).unwrap().get();
 
-                let start_point = Point2 {
+                let start_point = cgmath::Point2 {
                     x: vertex0.x(),
                     y: vertex0.y(),
                 };
-                let end_point = Point2 {
+                let end_point = cgmath::Point2 {
                     x: vertex1.x(),
                     y: vertex1.y(),
                 };
-                let cell_id = diagram.edge_get_cell(Some(edge_id)).unwrap();
-                let cell = diagram.get_cell(cell_id).get();
-                let twin_id = diagram.edge_get_twin(Some(edge_id)).unwrap();
-                let twin_cell_id = diagram.edge_get_cell(Some(twin_id)).unwrap();
+                let cell_id = self.diagram.edge_get_cell(Some(edge_id)).unwrap();
+                let cell = self.diagram.get_cell(cell_id).get();
+                let twin_id = self.diagram.edge_get_twin(Some(edge_id)).unwrap();
+                let twin_cell_id = self.diagram.edge_get_cell(Some(twin_id)).unwrap();
 
                 let cell_point = if cell.contains_point() {
-                    Self::retrieve_point(diagram, cell_id, &self.segments)
+                    self.retrieve_point(cell_id)
                 } else {
-                    Self::retrieve_point(diagram, twin_cell_id, &self.segments)
+                    self.retrieve_point(twin_cell_id)
                 };
                 let segment = if cell.contains_point() {
-                    Self::retrieve_segment(diagram, twin_cell_id, &self.segments)
+                    self.retrieve_segment(twin_cell_id)
                 } else {
-                    Self::retrieve_segment(diagram, cell_id, &self.segments)
+                    self.retrieve_segment(cell_id)
                 };
 
-                let segment_start_point = Point2 {
+                let segment_start_point = cgmath::Point2 {
                     x: Self::i2f(segment.start.x),
                     y: Self::i2f(segment.start.y),
                 };
-                let segment_end_point = Point2 {
+                let segment_end_point = cgmath::Point2 {
                     x: Self::i2f(segment.end.x),
                     y: Self::i2f(segment.end.y),
                 };
-                let cell_point = Point2 {
+                let cell_point = cgmath::Point2 {
                     x: Self::i2f(cell_point.x),
                     y: Self::i2f(cell_point.y),
                 };
@@ -614,12 +743,12 @@ where
                         continue;
                     }
                     let line = Line3 {
-                        start: Point3 {
+                        start: cgmath::Point3 {
                             x: start_point.x,
                             y: start_point.y,
                             z: distance_to_start,
                         },
-                        end: Point3 {
+                        end: cgmath::Point3 {
                             x: end_point.x,
                             y: end_point.y,
                             z: distance_to_end,
@@ -627,9 +756,12 @@ where
                     };
                     self.lines.push(line);
                 }
-                self.set_edge_rejected(edge_twin_id)
+            }
+            if let Some(edge_twin_id) = edge_twin_id {
+                let _ = ignored_edges.insert(edge_twin_id.0);
             }
         }
+        self.ignored_edges = Some(ignored_edges);
     }
 
     #[inline(always)]

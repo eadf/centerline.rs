@@ -11,20 +11,22 @@ keywords = ["geometry"]
 
 [dependencies]
 num = "^0.3.1"
-ordered-float = "^2.1.1"
 fnv = "^1.0.7"
 rb_tree = "^0.3.3"
 vec_map = "^0.8.2"
 num-bigint = "^0.3.1"
 num-traits = "^0.2.14"
-boostvoronoi = "^0.4.1"
+#boostvoronoi = "^0.4.2"
+#boostvoronoi = {path = "../boostvoronoi.rs"}
+boostvoronoi = { git = "https://github.com/eadf/boostvoronoi.rs" }
 linestring = {version="^0.0.10",default-features=false,features=["impl-cgmath"]}
-#linestring = {path = "../linestring.rs", features = ["impl-cgmath"]}
+#linestring = {path = "../linestring.rs",default-features=false,features=["impl-cgmath"]}
 cgmath = "^0.18.0"
 approx = "^0.4.0"
 obj-rs = "^0.6.2"
 thiserror = "^1.0.24"
 rayon = "^1.5.0"
+bitflags = "^1.2.1"
 
 [[example]]
 name = "fltk_gui"
@@ -37,3 +39,4 @@ path = "example/cli.rs"
 [dev-dependencies]
 fltk = "^0.15.5"
 itertools = "^0.10.0"
+ordered-float = "^2.1.1"

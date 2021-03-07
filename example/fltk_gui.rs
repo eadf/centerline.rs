@@ -83,7 +83,7 @@ const W: i32 = 800;
 pub enum GuiMessage {
     SliderPreChanged(f64),
     SliderPostChanged(f64),
-    SliderDotChanged(f64),
+    SliderDotChanged(f32),
 }
 
 /// Data containing an individual shape, this will be processed by a single thread.
@@ -105,7 +105,7 @@ struct Configuration {
     input_distance_dirty: bool,
     centerline_distance: f64,
     centerline_distance_dirty: bool,
-    normalized_dot: f64,
+    normalized_dot: f32,
     normalized_dot_dirty: bool,
     last_message: Option<GuiMessage>,
 }
@@ -133,7 +133,7 @@ fn main() -> Result<(), CenterlineError> {
     slider_pre.set_color(Color::White);
 
     let mut slider_dot = HorNiceSlider::new(5, 5 + HF + 50, WF, 25, "normalized dot product limit");
-    slider_dot.set_value(0.0);
+    slider_dot.set_value(0.38);
     slider_dot.set_frame(FrameType::PlasticUpBox);
     slider_dot.set_color(Color::White);
 
@@ -147,6 +147,8 @@ fn main() -> Result<(), CenterlineError> {
     slider_post.set_value(1.0);
     slider_post.set_frame(FrameType::PlasticUpBox);
     slider_post.set_color(Color::White);
+    // temporary hide
+    slider_post.hide();
 
     wind.set_color(Color::White);
     wind.end();
@@ -157,7 +159,7 @@ fn main() -> Result<(), CenterlineError> {
             window_center: (WF / 2, HF / 2),
             centerline_distance: 0.0,
             centerline_distance_dirty: true,
-            normalized_dot: 0.0,
+            normalized_dot: 0.38,
             normalized_dot_dirty: true,
             input_distance: 0.0,
             input_distance_dirty: true,
@@ -179,7 +181,7 @@ fn main() -> Result<(), CenterlineError> {
     });
 
     slider_dot.set_callback2(move |s| {
-        let value = s.value() as f64 * 400.0;
+        let value = s.value() as f32;
         s.set_label(
             ("               Normalized dot limit:".to_string()
                 + &value.to_string()
@@ -404,10 +406,8 @@ fn recalculate_centerline(
 ) -> Result<(), CenterlineError> {
     println!("recalculate_centerline()");
     if let Some(ref mut centerline) = shape.centerline {
-        if let Some(ref diagram) = centerline.diagram {
-            centerline.calculate_centerline()?;
-            println!("centerline.lines.len() = {:?}", centerline.lines.len());
-        }
+        centerline.calculate_centerline(configuration.normalized_dot)?;
+        println!("centerline.lines.len() = {:?}", centerline.lines.len());
     } else {
         dbg!(shape.centerline.is_none());
         println!("centerline was none");
@@ -416,7 +416,10 @@ fn recalculate_centerline(
 }
 
 /// Re-calculate centerline
-fn simplify_centerline(shape: &mut Shape, configuration: Configuration)-> Result<(),CenterlineError> {
+fn simplify_centerline(
+    shape: &mut Shape,
+    configuration: Configuration,
+) -> Result<(), CenterlineError> {
     println!("simplify_centerline()");
     Ok(())
 }
