@@ -356,7 +356,8 @@ where
     pub lines: Vec<Line3<F1>>,
     pub arcs: Vec<VoronoiParabolicArc<F1>>,
     pub linestrings: Vec<LineString3<F1>>,
-    ignored_edges: Option<fnv::FnvHashSet<usize>>,
+    ignored_edges: Option<num_bigint::BigUint>,
+    //ignored_edges: Option<fnv::FnvHashSet<usize>>,
 }
 
 impl<I1, F1, I2, F2> Centerline<I1, F1, I2, F2>
@@ -374,7 +375,7 @@ where
             lines: Vec::<Line3<F1>>::new(),
             linestrings: Vec::<LineString3<F1>>::new(),
             arcs: Vec::<VoronoiParabolicArc<F1>>::new(),
-            ignored_edges: Some(fnv::FnvHashSet::<usize>::default()),
+            ignored_edges: Some(num_bigint::BigUint::default()),
         }
     }
 
@@ -386,14 +387,11 @@ where
             lines: Vec::<Line3<F1>>::new(),
             linestrings: Vec::<LineString3<F1>>::new(),
             arcs: Vec::<VoronoiParabolicArc<F1>>::new(),
-            ignored_edges: Some(fnv::FnvHashSet::<usize>::default()),
+            ignored_edges: None,
         }
     }
 
     pub fn build_voronoi(&mut self) -> Result<(), CenterlineError> {
-        // drawn_edges should always be Some when this method runs
-        self.ignored_edges.as_mut().unwrap().clear();
-
         let mut vb = Builder::new();
         vb.with_segments(self.segments.iter())?;
         self.diagram = vb.construct()?;
@@ -402,6 +400,7 @@ where
     }
 
     pub fn calculate_centerline(&mut self, dot_limit: F1) -> Result<(), CenterlineError> {
+
         self.normalized_dot_test(dot_limit);
         self.traverse_edges();
         Ok(())
@@ -449,8 +448,10 @@ where
     /// maybe mark each vertex identical to input points..
     fn normalized_dot_test(&mut self, dot_limit: F1) {
         //println!("normalized_dot_test");
-        let mut ignored_edges = self.ignored_edges.take().unwrap();
-        ignored_edges.clear();
+        let mut ignored_edges = num_bigint::BigUint::default();
+        // ensure capacity of bit field
+        ignored_edges.set_bit(self.segments.len() as u64, true);
+        ignored_edges.set_bit(self.segments.len() as u64, false);
 
         for (c_id, cell) in self.diagram.cells().iter().enumerate() {
             let cell_c = cell.get();
@@ -542,7 +543,7 @@ where
     fn normalized_dot_test_6(
         &self,
         dot_limit: F1,
-        ignored_edges: &mut fnv::FnvHashSet<usize>,
+        ignored_edges: &mut num_bigint::BigUint,
         edge: Option<VD::VoronoiEdgeIndex>,
         vertex0: &cgmath::Point2<F1>,
         vertex1: &cgmath::Point2<F1>,
@@ -556,10 +557,10 @@ where
             let dot_product = segment_v.dot(vertex_v).abs();
             if dot_product < dot_limit {
                 if let Some(twin) = self.diagram.edge_get_twin(edge) {
-                    let _ = ignored_edges.insert(twin.0);
+                    ignored_edges.set_bit(twin.0 as u64, true);
                 }
                 if let Some(edge) = edge {
-                    let _ = ignored_edges.insert(edge.0);
+                    ignored_edges.set_bit(edge.0 as u64, true);
                 }
                 return true;
             }
@@ -580,10 +581,10 @@ where
     fn is_edge_rejected_2(
         &self,
         edge_id: Option<VD::VoronoiEdgeIndex>,
-        ignored_edges: &fnv::FnvHashSet<usize>,
+        ignored_edges: &num_bigint::BigUint,
     ) -> bool {
         if let Some(edge_id_u) = edge_id {
-            self.is_edge_rejected(edge_id) || ignored_edges.contains(&edge_id_u.0)
+            self.is_edge_rejected(edge_id) || ignored_edges.bit(edge_id_u.0 as u64)
         } else {
             true
         }
@@ -643,11 +644,11 @@ where
             let edge_id = VD::VoronoiEdgeIndex(it.0);
 
             let edge = it.1.get();
-            if ignored_edges.contains(&edge_id.0) {
+            if ignored_edges.bit(edge_id.0 as u64)  {
                 continue;
             }
             if !edge.is_primary() || self.is_edge_rejected_2(Some(edge_id), &ignored_edges) {
-                let _ = ignored_edges.insert(edge_id.0);
+                let _ = ignored_edges.set_bit(edge_id.0 as u64, true);
                 continue;
             }
             let edge_twin_id = self.diagram.edge_get_twin(Some(edge_id));
@@ -657,7 +658,7 @@ where
                 println! {"Error: Edge is NOT finite! {:?}", edge_id};
                 self.reject_edge(Some(edge_id), ColorFlag::INFINITE);
                 self.recursive_reject_edge(Some(edge_id), ColorFlag::EXTERNAL);
-                let _ = ignored_edges.insert(edge_id.0);
+                let _ = ignored_edges.set_bit(edge_id.0 as u64, true);
                 continue;
             } else {
                 // Edge is finite so we know that vertex0 and vertex1 is_some()
@@ -761,7 +762,7 @@ where
                 }
             }
             if let Some(edge_twin_id) = edge_twin_id {
-                let _ = ignored_edges.insert(edge_twin_id.0);
+                let _ = ignored_edges.set_bit(edge_twin_id.0 as u64, true);
             }
         }
         self.ignored_edges = Some(ignored_edges);
