@@ -6,6 +6,9 @@
 //#![deny(unused_imports)]
 #![allow(unused_imports)]
 #![feature(hash_drain_filter)]
+#![feature(test)]
+
+mod bench;
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;
@@ -445,7 +448,7 @@ where
     /// TODO: there must be a quicker way to get this information from the voronoi diagram
     /// maybe mark each vertex identical to input points..
     fn normalized_dot_test(&mut self, dot_limit: F1) {
-        println!("normalized_dot_test");
+        //println!("normalized_dot_test");
         let mut ignored_edges = self.ignored_edges.take().unwrap();
         ignored_edges.clear();
 
