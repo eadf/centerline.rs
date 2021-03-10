@@ -19,8 +19,9 @@ num-traits = "^0.2.14"
 #boostvoronoi = "^0.4.2"
 #boostvoronoi = {path = "../boostvoronoi.rs"}
 boostvoronoi = { git = "https://github.com/eadf/boostvoronoi.rs" }
-linestring = {version="^0.0.10",default-features=false,features=["impl-cgmath"]}
+#linestring = {version="^0.0.10",default-features=false,features=["impl-cgmath"]}
 #linestring = {path = "../linestring.rs",default-features=false,features=["impl-cgmath"]}
+linestring = { git = "https://github.com/eadf/linestring.rs",default-features=false,features=["impl-cgmath"]}
 cgmath = "^0.18.0"
 approx = "^0.4.0"
 obj-rs = "^0.6.2"
@@ -40,3 +41,6 @@ path = "example/cli.rs"
 fltk = "^0.15.5"
 itertools = "^0.10.0"
 ordered-float = "^2.1.1"
+
+[features]
+console_debug = []

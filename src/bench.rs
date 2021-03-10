@@ -375,7 +375,7 @@ fn bench_1(b: &mut Bencher) -> Result<(), CenterlineError> {
         "Result: lines:{}, arcs:{}, linsestrings:{}",
         centerline.lines.len(),
         centerline.arcs.len(),
-        centerline.linestrings.len()
+        centerline.line_strings.len()
     );
     b.iter(move || {
         let _ = centerline.calculate_centerline(0.38);

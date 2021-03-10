@@ -8,6 +8,7 @@
 #![feature(hash_drain_filter)]
 #![feature(test)]
 
+#[cfg(test)]
 mod bench;
 
 use boostvoronoi::builder as VB;
@@ -22,6 +23,7 @@ use linestring::cgmath_3d;
 use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
 use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Neg;
 use std::rc::Rc;
@@ -349,15 +351,13 @@ where
     pub segments: Vec<boostvoronoi::Line<I1>>,
     // the voronoi diagram itself
     pub diagram: VD::VoronoiDiagram<I1, F1, I2, F2>,
-    // rejected or already processed edges
-    //rejected_edges: fnv::FnvHashSet<usize>,
-    // rejected or already processed vertices
-    //rejected_vertices: fnv::FnvHashSet<usize>,
-    pub lines: Vec<Line3<F1>>,
-    pub arcs: Vec<VoronoiParabolicArc<F1>>,
-    pub linestrings: Vec<LineString3<F1>>,
+    pub lines: Option<Vec<Line3<F1>>>,
+    pub line_strings: Option<Vec<LineString3<F1>>>,
+
+    /// bit field defining edges rejected by EXTERNAL or INFINITE
+    rejected_edges: Option<num_bigint::BigUint>,
+    /// bit field defining edges rejected by 'rejected_edges' + dot test
     ignored_edges: Option<num_bigint::BigUint>,
-    //ignored_edges: Option<fnv::FnvHashSet<usize>>,
 }
 
 impl<I1, F1, I2, F2> Centerline<I1, F1, I2, F2>
@@ -372,10 +372,10 @@ where
         Self {
             diagram: VD::VoronoiDiagram::default(),
             segments: Vec::<boostvoronoi::Line<I1>>::default(),
-            lines: Vec::<Line3<F1>>::new(),
-            linestrings: Vec::<LineString3<F1>>::new(),
-            arcs: Vec::<VoronoiParabolicArc<F1>>::new(),
-            ignored_edges: Some(num_bigint::BigUint::default()),
+            lines: Some(Vec::<Line3<F1>>::new()),
+            line_strings: Some(Vec::<LineString3<F1>>::new()),
+            rejected_edges: None,
+            ignored_edges: None,
         }
     }
 
@@ -384,9 +384,9 @@ where
         Self {
             diagram: VD::VoronoiDiagram::default(),
             segments,
-            lines: Vec::<Line3<F1>>::new(),
-            linestrings: Vec::<LineString3<F1>>::new(),
-            arcs: Vec::<VoronoiParabolicArc<F1>>::new(),
+            lines: Some(Vec::<Line3<F1>>::new()),
+            line_strings: Some(Vec::<LineString3<F1>>::new()),
+            rejected_edges: None,
             ignored_edges: None,
         }
     }
@@ -395,15 +395,34 @@ where
         let mut vb = Builder::new();
         vb.with_segments(self.segments.iter())?;
         self.diagram = vb.construct()?;
-        self.reject_exterior();
+        self.reject_edges();
+        #[cfg(feature = "console_debug")]
+        println!(
+            "build_voronoi()-> Rejected edges:{:?} {}",
+            self.rejected_edges.as_ref(),
+            &self.rejected_edges.as_ref().unwrap().bit(0)
+        );
         Ok(())
     }
 
-    pub fn calculate_centerline(&mut self, dot_limit: F1) -> Result<(), CenterlineError> {
-
+    pub fn calculate_centerline(
+        &mut self,
+        dot_limit: F1,
+        discrete_limit: F1,
+    ) -> Result<(), CenterlineError> {
         self.normalized_dot_test(dot_limit);
-        self.traverse_edges();
+        self.traverse_edges(discrete_limit);
         Ok(())
+    }
+
+    /// returns a copy of the ignored edges bit field
+    pub fn ignored_edges(&self) -> Option<num_bigint::BigUint> {
+        self.ignored_edges.to_owned()
+    }
+
+    /// returns a copy of the rejected edges bit field
+    pub fn rejected_edges(&self) -> Option<num_bigint::BigUint> {
+        self.rejected_edges.to_owned()
     }
 
     pub fn retrieve_point(&self, cell_id: VD::VoronoiCellIndex) -> boostvoronoi::Point<I1> {
@@ -426,16 +445,37 @@ where
         &self.diagram
     }
 
-    /// Color exterior edges.
-    fn reject_exterior(&self) {
+    /// Color exterior edges also rejects secondary edges
+    fn reject_edges(&mut self) {
+        let mut rejected_edges=  num_bigint::BigUint::default();
+        // ensure capacity of bit field by setting last bit +1 to true
+        rejected_edges.set_bit(self.diagram().edges().len() as u64, true);
+
         for it in self.diagram.edges().iter() {
-            let edge_id = Some(it.get().get_id());
-            if !self.diagram.edge_is_finite(edge_id).unwrap() {
-                self.recursive_reject_edge(edge_id, ColorFlag::EXTERNAL);
+            let edge = it.get();
+            let edge_id = edge.get_id();
+            let edge_sid = Some(edge_id);
+            if edge.is_secondary() {
+                rejected_edges.set_bit(edge_id.0 as u64, true);
                 self.diagram
-                    .edge_or_color(edge_id, ColorFlag::INFINITE.bits);
+                    .edge_or_color(edge_sid, ColorFlag::SECONDARY.bits);
+                let twin_sid = self.diagram.edge_get_twin(edge_sid);
+                self.diagram
+                    .edge_or_color(twin_sid, ColorFlag::SECONDARY.bits);
+                if let Some(twin_id) = twin_sid {
+                    rejected_edges.set_bit(twin_id.0 as u64, true);
+                }
+            }
+            if !self.diagram.edge_is_finite(edge_sid).unwrap() {
+                self.recursively_reject_edge(edge_sid, ColorFlag::EXTERNAL, &mut rejected_edges);
+
+                self.diagram
+                    .edge_or_color(edge_sid, ColorFlag::INFINITE.bits);
+                rejected_edges.set_bit(edge_id.0 as u64, true);
             }
         }
+
+        self.rejected_edges = Some(rejected_edges);
     }
 
     /// Reject edges that does not pass the dot limit test.
@@ -447,11 +487,7 @@ where
     /// TODO: there must be a quicker way to get this information from the voronoi diagram
     /// maybe mark each vertex identical to input points..
     fn normalized_dot_test(&mut self, dot_limit: F1) {
-        //println!("normalized_dot_test");
-        let mut ignored_edges = num_bigint::BigUint::default();
-        // ensure capacity of bit field
-        ignored_edges.set_bit(self.segments.len() as u64, true);
-        ignored_edges.set_bit(self.segments.len() as u64, false);
+        let mut ignored_edges = self.rejected_edges.clone().take().unwrap();
 
         for (c_id, cell) in self.diagram.cells().iter().enumerate() {
             let cell_c = cell.get();
@@ -475,7 +511,7 @@ where
                 loop {
                     e = self.diagram.get_edge(e.unwrap()).get().next();
 
-                    if !self.is_edge_rejected_2(e, &ignored_edges) {
+                    if !Self::is_edge_rejected(e, &ignored_edges) {
                         // all infinite edges should be rejected at this point, so
                         // all edges should contain a vertex0 and vertex1
 
@@ -538,7 +574,7 @@ where
         self.ignored_edges = Some(ignored_edges);
     }
 
-    /// set the edge as rejected in the hashmap if it fails the dot test
+    /// set the edge as rejected if it fails the dot test
     #[allow(clippy::too_many_arguments)]
     fn normalized_dot_test_6(
         &self,
@@ -568,23 +604,14 @@ where
         false
     }
 
-    /// check if an edge is rejected based on the color value
+    /// check if an edge is rejected based on the ignored_edges map
     #[inline(always)]
-    fn is_edge_rejected(&self, edge_id: Option<VD::VoronoiEdgeIndex>) -> bool {
-        self.diagram
-            .edge_get_color(edge_id)
-            .map_or(true, |x| x != 0)
-    }
-
-    /// check if an edge is rejected based on the color value and the ignored_edges hashmap
-    #[inline(always)]
-    fn is_edge_rejected_2(
-        &self,
+    fn is_edge_rejected(
         edge_id: Option<VD::VoronoiEdgeIndex>,
         ignored_edges: &num_bigint::BigUint,
     ) -> bool {
         if let Some(edge_id_u) = edge_id {
-            self.is_edge_rejected(edge_id) || ignored_edges.bit(edge_id_u.0 as u64)
+            ignored_edges.bit(edge_id_u.0 as u64)
         } else {
             true
         }
@@ -592,17 +619,26 @@ where
 
     /// Set the color value of the edge
     #[inline(always)]
-    fn reject_edge(&self, edge_id: Option<VD::VoronoiEdgeIndex>, color: ColorFlag) {
+    fn reject_edge(
+        &self,
+        edge_id: Option<VD::VoronoiEdgeIndex>,
+        color: ColorFlag,
+        ignored_edges: &mut num_bigint::BigUint,
+    ) {
         self.diagram.edge_or_color(edge_id, color.bits);
+        if let Some(edge_id) = edge_id {
+            ignored_edges.set_bit(edge_id.0 as u64, true);
+        }
     }
 
+    /*
     #[allow(dead_code)]
     #[inline(always)]
     fn is_vertex_rejected(&self, vertex_id: Option<VD::VoronoiVertexIndex>) -> bool {
         self.diagram
             .vertex_get_color(vertex_id)
             .map_or(true, |x| x != 0)
-    }
+    }*/
 
     #[inline(always)]
     fn reject_vertex(&self, vertex_id: Option<VD::VoronoiVertexIndex>, color: ColorFlag) {
@@ -611,21 +647,27 @@ where
 
     /// Recursively marks this edge and all other edges connecting to it as rejected.
     /// Recursion stops when connecting to input geometry.
-    fn recursive_reject_edge(&self, edge_id: Option<VD::VoronoiEdgeIndex>, color: ColorFlag) {
-        if edge_id.is_none() || self.is_edge_rejected(edge_id) {
+    fn recursively_reject_edge(
+        &self,
+        edge_id: Option<VD::VoronoiEdgeIndex>,
+        color: ColorFlag,
+        ignored_edges: &mut num_bigint::BigUint,
+    ) {
+        if edge_id.is_none() || Self::is_edge_rejected(edge_id, ignored_edges) {
             return;
         }
-        self.reject_edge(edge_id, color);
-        self.reject_edge(self.diagram.edge_get_twin(edge_id), color);
+        self.reject_edge(edge_id, color, ignored_edges);
+        self.reject_edge(self.diagram.edge_get_twin(edge_id), color, ignored_edges);
         let v = self.diagram.edge_get_vertex1(edge_id);
         if v.is_none() || !self.diagram.get_edge(edge_id.unwrap()).get().is_primary() {
+            // break recursion if vertex1 is not found or it the edge is primary
             return;
         }
         self.reject_vertex(v, color);
         let mut e = self.diagram.vertex_get_incident_edge(v);
         let v_incident_edge = e;
         while e.is_some() {
-            self.recursive_reject_edge(e, color);
+            self.recursively_reject_edge(e, color, ignored_edges);
             e = self.diagram.edge_rot_next(e);
             if e == v_incident_edge {
                 break;
@@ -634,138 +676,424 @@ where
     }
 
     /// move across each edge and sample the lines and arcs
-    fn traverse_edges(&mut self) {
-        self.lines.clear();
-        self.arcs.clear();
-        self.linestrings.clear();
-        let mut ignored_edges = self.ignored_edges.take().unwrap();
+    fn traverse_edges(&mut self, maxdist: F1) {
+        // de-couple self and containers
+        let mut lines = self.lines.take().unwrap();
+        let mut linestrings = self.line_strings.take().unwrap();
+
+        // operate on a copy of self.ignored_edges
+        let mut ignored_edges = self.ignored_edges.clone().take().unwrap();
+        let mut used_edges = ignored_edges.clone();
+
+        linestrings.clear();
+        lines.clear();
 
         for it in self.diagram.edges().iter().enumerate() {
             let edge_id = VD::VoronoiEdgeIndex(it.0);
+            assert_eq!(edge_id.0, it.0);
 
-            let edge = it.1.get();
-            if ignored_edges.bit(edge_id.0 as u64)  {
+            // could not use that an iter().filter() because of the BC
+            if used_edges.bit(edge_id.0 as u64) {
                 continue;
             }
-            if !edge.is_primary() || self.is_edge_rejected_2(Some(edge_id), &ignored_edges) {
-                let _ = ignored_edges.set_bit(edge_id.0 as u64, true);
-                continue;
+
+            self.traverse_edge(
+                edge_id,
+                &mut ignored_edges,
+                &mut used_edges,
+                &mut lines,
+                &mut linestrings,
+                maxdist,
+            );
+        }
+
+        #[cfg(feature = "console_debug")]
+        {
+            println!("Got {} single lines", lines.len());
+            println!("Got {} linestrings", linestrings.len());
+            println!(
+                "self.ignored_edges {:?}",
+                self.ignored_edges.clone().unwrap()
+            );
+            println!("     ignored_edges {:?}", ignored_edges);
+            println!("        used_edges {:?}", used_edges);
+        }
+        // put the containers back
+        self.lines = Some(lines);
+        self.line_strings = Some(linestrings);
+    }
+
+    /// Mark an edge and it's twin as used/rejected
+    #[inline(always)]
+    fn mark_edge_and_twin_as_used(
+        &self,
+        edge_id: VD::VoronoiEdgeIndex,
+        used_edges: &mut num_bigint::BigUint,
+    ) {
+        used_edges.set_bit(edge_id.0 as u64, true);
+        #[cfg(feature = "console_debug")]
+        print!("marking {}", edge_id.0);
+        if let Some(twin) = self.diagram.edge_get_twin(Some(edge_id)) {
+            #[cfg(feature = "console_debug")]
+            print!(" & {}", twin.0);
+            if used_edges.bit(twin.0 as u64) {
+                print!(" TWIN was already used!!!!!");
             }
-            let edge_twin_id = self.diagram.edge_get_twin(Some(edge_id));
+            used_edges.set_bit(twin.0 as u64, true);
+        }
+    }
 
-            if !self.diagram.edge_is_finite(Some(edge_id)).unwrap() {
-                // This should not happen, this edge should already have been filtered out
-                println! {"Error: Edge is NOT finite! {:?}", edge_id};
-                self.reject_edge(Some(edge_id), ColorFlag::INFINITE);
-                self.recursive_reject_edge(Some(edge_id), ColorFlag::EXTERNAL);
-                let _ = ignored_edges.set_bit(edge_id.0 as u64, true);
-                continue;
-            } else {
-                // Edge is finite so we know that vertex0 and vertex1 is_some()
-                let vertex0 = self.diagram.vertex_get(edge.vertex0()).unwrap().get();
+    /// move across each adjacent edge and sample the lines and arcs
+    fn traverse_edge(
+        &self,
+        seed_edge: VD::VoronoiEdgeIndex,
+        ignored_edges: &mut num_bigint::BigUint,
+        used_edges: &mut num_bigint::BigUint,
+        lines: &mut Vec<Line3<F1>>,
+        linestrings: &mut Vec<LineString3<F1>>,
+        maxdist: F1,
+    ) {
+        #[cfg(feature = "console_debug")]
+        println!();
+        #[cfg(feature = "console_debug")]
+        println!("->traverse_edge({})", seed_edge.0);
+        #[cfg(feature = "console_debug")]
+        let mut mockup = Vec::<Vec<VD::VoronoiEdgeIndex>>::default();
 
-                let vertex1 = self.diagram.edge_get_vertex1(Some(edge_id));
-                let vertex1 = self.diagram.vertex_get(vertex1).unwrap().get();
+        let count = self
+            .diagram
+            .edge_rot_next_iterator(Some(seed_edge))
+            .filter(|x| !ignored_edges.bit(x.0 as u64))
+            .count();
+        if count == 1 {
+            let mut start_points = VecDeque::<VD::VoronoiEdgeIndex>::default();
+            let mut current_edge_set = Vec::<VD::VoronoiEdgeIndex>::new();
+            start_points.push_front(seed_edge);
 
-                let start_point = cgmath::Point2 {
-                    x: vertex0.x(),
-                    y: vertex0.y(),
-                };
-                let end_point = cgmath::Point2 {
-                    x: vertex1.x(),
-                    y: vertex1.y(),
-                };
-                let cell_id = self.diagram.edge_get_cell(Some(edge_id)).unwrap();
-                let cell = self.diagram.get_cell(cell_id).get();
-                let twin_id = self.diagram.edge_get_twin(Some(edge_id)).unwrap();
-                let twin_cell_id = self.diagram.edge_get_cell(Some(twin_id)).unwrap();
+            while !start_points.is_empty() {
+                #[cfg(feature = "console_debug")]
+                println!();
+                let edge = start_points.pop_front().unwrap();
+                #[cfg(feature = "console_debug")]
+                {
+                    let v0 = self.diagram().edge_get_vertex0(Some(edge));
+                    let v0 = self.diagram().vertex_get(v0).unwrap().get();
 
-                let cell_point = if cell.contains_point() {
-                    self.retrieve_point(cell_id)
-                } else {
-                    self.retrieve_point(twin_cell_id)
-                };
-                let segment = if cell.contains_point() {
-                    self.retrieve_segment(twin_cell_id)
-                } else {
-                    self.retrieve_segment(cell_id)
-                };
+                    let v1 = self.diagram().edge_get_vertex1(Some(edge));
+                    let v1 = self.diagram().vertex_get(v1).unwrap().get();
 
-                let segment_start_point = cgmath::Point2 {
-                    x: Self::i2f(segment.start.x),
-                    y: Self::i2f(segment.start.y),
-                };
-                let segment_end_point = cgmath::Point2 {
-                    x: Self::i2f(segment.end.x),
-                    y: Self::i2f(segment.end.y),
-                };
-                let cell_point = cgmath::Point2 {
-                    x: Self::i2f(cell_point.x),
-                    y: Self::i2f(cell_point.y),
-                };
-                let distance_to_start = linestring::cgmath_2d::distance_to_line_squared(
-                    &start_point,
-                    &segment_start_point,
-                    &segment_end_point,
-                )
-                .sqrt();
-                let distance_to_end = linestring::cgmath_2d::distance_to_line_squared(
-                    &end_point,
-                    &segment_start_point,
-                    &segment_end_point,
-                )
-                .sqrt();
-
-                if edge.is_curved() {
-                    let arc = VoronoiParabolicArc::new(
-                        Line2 {
-                            start: segment_start_point,
-                            end: segment_end_point,
-                        },
-                        cell_point,
-                        start_point,
-                        end_point,
+                    print!(
+                        "now looking at {} i:{} u:{} ({:5.3},{:.3})->({:.3},{:.3})",
+                        edge.0,
+                        ignored_edges.bit(edge.0 as u64),
+                        used_edges.bit(edge.0 as u64),
+                        v0.x(),
+                        v0.y(),
+                        v1.x(),
+                        v1.y(),
                     );
-                    self.arcs.push(arc);
-                } else {
-                    // Edge is not curved
+                }
 
-                    if distance_to_start.ulps_eq(
-                        &F1::zero(),
-                        F1::default_epsilon(),
-                        F1::default_max_ulps(),
-                    ) {
-                        println!("distance is zero");
-                        continue;
+                if ignored_edges.bit(edge.0 as u64) {
+                    // Should never happen
+                    panic!();
+                }
+                if used_edges.bit(edge.0 as u64) {
+                    #[cfg(feature = "console_debug")]
+                    print!(" skip");
+                    // edge was already processed, continue
+                    continue;
+                }
+                #[cfg(feature = "console_debug")]
+                println!();
+
+                current_edge_set.push(edge);
+                self.mark_edge_and_twin_as_used(edge, used_edges);
+
+                let mut next_edge_o = self.diagram.edge_get_next(Some(edge));
+                while next_edge_o.is_some() {
+                    #[cfg(feature = "console_debug")]
+                    print!("Inner loop next_edge={} ", next_edge_o.unwrap().0);
+
+                    // it does not matter if next_edge is rejected/valid, it will be fixed by the iterator
+                    let next_edges: Vec<VD::VoronoiEdgeIndex> = self
+                        .diagram
+                        .edge_rot_next_iterator(next_edge_o)
+                        .filter(|x| !ignored_edges.bit(x.0 as u64))
+                        .collect();
+
+                    #[cfg(feature = "console_debug")]
+                    {
+                        print!("candidates[");
+
+                        for ne in next_edges.iter() {
+                            if used_edges.bit(ne.0 as u64) {
+                                print!("!");
+                            }
+                            print!("{},", ne.0);
+                        }
+                        println!("]");
                     }
-                    if distance_to_end.ulps_eq(
-                        &F1::zero(),
-                        F1::default_epsilon(),
-                        F1::default_max_ulps(),
-                    ) {
-                        println!("distance is zero");
-                        continue;
+                    match next_edges.len() {
+                        1 | 2 => {
+                            let next_edges: Vec<VD::VoronoiEdgeIndex> = next_edges
+                                .into_iter()
+                                .filter(|x| !used_edges.bit(x.0 as u64))
+                                .collect();
+                            if next_edges.len() == 1 {
+                                // continue walking the edge line
+                                let e = next_edges.first().unwrap().to_owned();
+                                current_edge_set.push(e);
+                                self.mark_edge_and_twin_as_used(e, used_edges);
+
+                                next_edge_o = self.diagram.edge_get_next(Some(e));
+                            } else {
+                                // terminating the line string, pushing candidates
+                                self.convert_edges_to_lines(
+                                    &current_edge_set,
+                                    lines,
+                                    linestrings,
+                                    maxdist,
+                                );
+                                #[cfg(feature = "console_debug")]
+                                mockup.push(current_edge_set.clone());
+                                current_edge_set.clear();
+                                next_edge_o = None;
+                                if !next_edges.is_empty() {
+                                    #[cfg(feature = "console_debug")]
+                                    print!("1|2 Pushing new start points: [");
+                                    for e in next_edges.iter() {
+                                        if !ignored_edges.bit(e.0 as u64)
+                                            && !used_edges.bit(e.0 as u64)
+                                        {
+                                            #[cfg(feature = "console_debug")]
+                                            print!("{},", e.0);
+                                            start_points.push_back(*e);
+                                        }
+                                    }
+                                }
+                                #[cfg(feature = "console_debug")]
+                                {
+                                    println!("]");
+                                    println!("1|2 Starting new set");
+                                }
+                            }
+                            continue;
+                        }
+                        _ => {
+                            // to many or too few intersections found, end this linestring and push the new candidates to the queue
+                            self.convert_edges_to_lines(
+                                &current_edge_set,
+                                lines,
+                                linestrings,
+                                maxdist,
+                            );
+                            if !next_edges.is_empty() {
+                                #[cfg(feature = "console_debug")]
+                                print!("0|_ Pushing new start points: [");
+                                for e in next_edges.iter() {
+                                    if !ignored_edges.bit(e.0 as u64) && !used_edges.bit(e.0 as u64)
+                                    {
+                                        #[cfg(feature = "console_debug")]
+                                        print!("{},", e.0);
+                                        start_points.push_back(*e);
+                                    }
+                                }
+                                #[cfg(feature = "console_debug")]
+                                println!("]");
+                            }
+                            #[cfg(feature = "console_debug")]
+                            mockup.push(current_edge_set.clone());
+                            current_edge_set.clear();
+                            next_edge_o = None;
+                            #[cfg(feature = "console_debug")]
+                            println!("0|_ Starting new set");
+
+                            continue;
+                        }
                     }
-                    let line = Line3 {
-                        start: cgmath::Point3 {
-                            x: start_point.x,
-                            y: start_point.y,
-                            z: distance_to_start,
-                        },
-                        end: cgmath::Point3 {
-                            x: end_point.x,
-                            y: end_point.y,
-                            z: distance_to_end,
-                        },
-                    };
-                    self.lines.push(line);
                 }
             }
-            if let Some(edge_twin_id) = edge_twin_id {
-                let _ = ignored_edges.set_bit(edge_twin_id.0 as u64, true);
+            #[cfg(feature = "console_debug")]
+            {
+                println!("mockups");
+                for m in mockup.iter() {
+                    println!("mockup {:?}", m.iter().map(|x| x.0).collect::<Vec<usize>>());
+                }
+            }
+        } else {
+            #[cfg(feature = "console_debug")]
+            println!(
+                "<-traverse_edge({}) ignoring start edge, count={} {:?}",
+                seed_edge.0,
+                count,
+                self.diagram
+                    .edge_rot_next_iterator(Some(seed_edge))
+                    .filter(|x| !ignored_edges.bit(x.0 as u64))
+                    .map(|x| x.0)
+                    .collect::<Vec<usize>>()
+            );
+        }
+    }
+
+    fn convert_edges_to_lines(
+        &self,
+        edges: &[VD::VoronoiEdgeIndex],
+        lines: &mut Vec<Line3<F1>>,
+        linestrings: &mut Vec<LineString3<F1>>,
+        maxdist: F1,
+    ) {
+        #[cfg(feature = "console_debug")]
+        println!();
+        #[cfg(feature = "console_debug")]
+        println!(
+            "Converting {:?} to lines",
+            edges.iter().map(|x| x.0).collect::<Vec<usize>>()
+        );
+        match edges.len() {
+            0 => panic!(),
+            1 => {
+                let edge_id = edges.first().unwrap();
+                let edge = self.diagram.get_edge(*edge_id).get();
+                match self.convert_edge_to_shape(&edge) {
+                    cgmath_3d::Shape3d::Line(l) => lines.push(l),
+                    cgmath_3d::Shape3d::ParabolicArc(a) => {
+                        linestrings.push(a.discretise_3d(maxdist));
+                    }
+                    cgmath_3d::Shape3d::Linestring(_s) => {
+                        panic!();
+                    }
+                }
+            }
+            _ => {
+                let mut ls = LineString3::<F1>::default();
+                for edge_id in edges.iter() {
+                    let edge = self.diagram.get_edge(*edge_id).get();
+                    match self.convert_edge_to_shape(&edge) {
+                        cgmath_3d::Shape3d::Line(l) => {
+                            //println!("->got {:?}", l);
+                            ls.push(l.start);
+                            ls.push(l.end);
+                            //println!("<-got");
+                        }
+                        cgmath_3d::Shape3d::ParabolicArc(a) => {
+                            //println!("->got {:?}", a);
+                            ls.append(a.discretise_3d(maxdist));
+                            //println!("<-got");
+                        }
+                        // should not happen
+                        cgmath_3d::Shape3d::Linestring(_s) => panic!(),
+                    }
+                }
+                linestrings.push(ls);
             }
         }
-        self.ignored_edges = Some(ignored_edges);
+        //println!("Converted {:?} to lines", edges);
+    }
+
+    fn convert_edge_to_shape(
+        &self,
+        edge: &VD::VoronoiEdge<I1, F1, I2, F2>,
+    ) -> cgmath_3d::Shape3d<F1> {
+        //println!("Converting {:?} to line", edge.get_id());
+        let edge_id = Some(edge.get_id());
+        let edge_twin_id = self.diagram.edge_get_twin(edge_id);
+
+        // Edge is finite so we know that vertex0 and vertex1 is_some()
+        let vertex0 = self.diagram.vertex_get(edge.vertex0()).unwrap().get();
+
+        let vertex1 = self.diagram.edge_get_vertex1(edge_id);
+        let vertex1 = self.diagram.vertex_get(vertex1).unwrap().get();
+
+        let start_point = cgmath::Point2 {
+            x: vertex0.x(),
+            y: vertex0.y(),
+        };
+        let end_point = cgmath::Point2 {
+            x: vertex1.x(),
+            y: vertex1.y(),
+        };
+        let cell_id = self.diagram.edge_get_cell(edge_id).unwrap();
+        let cell = self.diagram.get_cell(cell_id).get();
+        let twin_cell_id = self.diagram.edge_get_cell(edge_twin_id).unwrap();
+
+        let cell_point = if cell.contains_point() {
+            self.retrieve_point(cell_id)
+        } else {
+            self.retrieve_point(twin_cell_id)
+        };
+        let segment = if cell.contains_point() {
+            self.retrieve_segment(twin_cell_id)
+        } else {
+            self.retrieve_segment(cell_id)
+        };
+
+        let segment_start_point = cgmath::Point2 {
+            x: Self::i2f(segment.start.x),
+            y: Self::i2f(segment.start.y),
+        };
+        let segment_end_point = cgmath::Point2 {
+            x: Self::i2f(segment.end.x),
+            y: Self::i2f(segment.end.y),
+        };
+        let cell_point = cgmath::Point2 {
+            x: Self::i2f(cell_point.x),
+            y: Self::i2f(cell_point.y),
+        };
+        let distance_to_start = linestring::cgmath_2d::distance_to_line_squared(
+            &segment_start_point,
+            &segment_end_point,
+            &start_point,
+        )
+        .sqrt();
+        if distance_to_start.is_nan() {
+            println!(
+                "start_point:{:?}, segment_start_point:{:?}, segment_end_point:{:?} => NaN",
+                start_point, segment_start_point, segment_end_point
+            );
+        }
+        let distance_to_end = linestring::cgmath_2d::distance_to_line_squared(
+            &segment_start_point,
+            &segment_end_point,
+            &end_point,
+        )
+        .sqrt();
+        if distance_to_end.is_nan() {
+            println!(
+                "end_point:{:?}, segment_start_point:{:?}, segment_end_point:{:?} => NaN",
+                end_point, segment_start_point, segment_end_point
+            );
+        }
+        if edge.is_curved() {
+            let arc = VoronoiParabolicArc::new(
+                Line2 {
+                    start: segment_start_point,
+                    end: segment_end_point,
+                },
+                cell_point,
+                start_point,
+                end_point,
+            );
+            #[cfg(feature = "console_debug")]
+            println!("Converted {:?} to {:?}", edge.get_id().0, arc);
+            cgmath_3d::Shape3d::ParabolicArc(arc)
+        } else {
+            let line = Line3 {
+                start: cgmath::Point3 {
+                    x: start_point.x,
+                    y: start_point.y,
+                    z: distance_to_start,
+                },
+                end: cgmath::Point3 {
+                    x: end_point.x,
+                    y: end_point.y,
+                    z: distance_to_end,
+                },
+            };
+            #[cfg(feature = "console_debug")]
+            println!("Converted {:?} to {:?}", edge.get_id().0, line);
+            cgmath_3d::Shape3d::Line(line)
+        }
     }
 
     #[inline(always)]
