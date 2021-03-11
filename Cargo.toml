@@ -10,12 +10,12 @@ license = "AGPL-3.0"
 keywords = ["geometry"]
 
 [dependencies]
-num = "^0.3.1"
+num = "^0.4.0"
 fnv = "^1.0.7"
 rb_tree = "^0.3.3"
 vec_map = "^0.8.2"
-num-bigint = "^0.4.0"
 num-traits = "^0.2.14"
+yabf = {version="^0.0.2",default-features=false}
 #boostvoronoi = "^0.4.2"
 #boostvoronoi = {path = "../boostvoronoi.rs"}
 boostvoronoi = { git = "https://github.com/eadf/boostvoronoi.rs" }

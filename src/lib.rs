@@ -355,9 +355,9 @@ where
     pub line_strings: Option<Vec<LineString3<F1>>>,
 
     /// bit field defining edges rejected by EXTERNAL or INFINITE
-    rejected_edges: Option<num_bigint::BigUint>,
+    rejected_edges: Option<yabf::Yabf>,
     /// bit field defining edges rejected by 'rejected_edges' + dot test
-    ignored_edges: Option<num_bigint::BigUint>,
+    ignored_edges: Option<yabf::Yabf>,
 }
 
 impl<I1, F1, I2, F2> Centerline<I1, F1, I2, F2>
@@ -416,12 +416,12 @@ where
     }
 
     /// returns a copy of the ignored edges bit field
-    pub fn ignored_edges(&self) -> Option<num_bigint::BigUint> {
+    pub fn ignored_edges(&self) -> Option<yabf::Yabf> {
         self.ignored_edges.to_owned()
     }
 
     /// returns a copy of the rejected edges bit field
-    pub fn rejected_edges(&self) -> Option<num_bigint::BigUint> {
+    pub fn rejected_edges(&self) -> Option<yabf::Yabf> {
         self.rejected_edges.to_owned()
     }
 
@@ -447,23 +447,23 @@ where
 
     /// Color exterior edges also rejects secondary edges
     fn reject_edges(&mut self) {
-        let mut rejected_edges=  num_bigint::BigUint::default();
+        let mut rejected_edges= yabf::Yabf::default();
         // ensure capacity of bit field by setting last bit +1 to true
-        rejected_edges.set_bit(self.diagram().edges().len() as u64, true);
+        rejected_edges.set_bit(self.diagram().edges().len(), true);
 
         for it in self.diagram.edges().iter() {
             let edge = it.get();
             let edge_id = edge.get_id();
             let edge_sid = Some(edge_id);
             if edge.is_secondary() {
-                rejected_edges.set_bit(edge_id.0 as u64, true);
+                rejected_edges.set_bit(edge_id.0, true);
                 self.diagram
                     .edge_or_color(edge_sid, ColorFlag::SECONDARY.bits);
                 let twin_sid = self.diagram.edge_get_twin(edge_sid);
                 self.diagram
                     .edge_or_color(twin_sid, ColorFlag::SECONDARY.bits);
                 if let Some(twin_id) = twin_sid {
-                    rejected_edges.set_bit(twin_id.0 as u64, true);
+                    rejected_edges.set_bit(twin_id.0, true);
                 }
             }
             if !self.diagram.edge_is_finite(edge_sid).unwrap() {
@@ -471,7 +471,7 @@ where
 
                 self.diagram
                     .edge_or_color(edge_sid, ColorFlag::INFINITE.bits);
-                rejected_edges.set_bit(edge_id.0 as u64, true);
+                rejected_edges.set_bit(edge_id.0, true);
             }
         }
 
@@ -579,7 +579,7 @@ where
     fn normalized_dot_test_6(
         &self,
         dot_limit: F1,
-        ignored_edges: &mut num_bigint::BigUint,
+        ignored_edges: &mut yabf::Yabf,
         edge: Option<VD::VoronoiEdgeIndex>,
         vertex0: &cgmath::Point2<F1>,
         vertex1: &cgmath::Point2<F1>,
@@ -593,10 +593,10 @@ where
             let dot_product = segment_v.dot(vertex_v).abs();
             if dot_product < dot_limit {
                 if let Some(twin) = self.diagram.edge_get_twin(edge) {
-                    ignored_edges.set_bit(twin.0 as u64, true);
+                    ignored_edges.set_bit(twin.0, true);
                 }
                 if let Some(edge) = edge {
-                    ignored_edges.set_bit(edge.0 as u64, true);
+                    ignored_edges.set_bit(edge.0, true);
                 }
                 return true;
             }
@@ -608,10 +608,10 @@ where
     #[inline(always)]
     fn is_edge_rejected(
         edge_id: Option<VD::VoronoiEdgeIndex>,
-        ignored_edges: &num_bigint::BigUint,
+        ignored_edges: &yabf::Yabf,
     ) -> bool {
         if let Some(edge_id_u) = edge_id {
-            ignored_edges.bit(edge_id_u.0 as u64)
+            ignored_edges.bit(edge_id_u.0)
         } else {
             true
         }
@@ -623,11 +623,11 @@ where
         &self,
         edge_id: Option<VD::VoronoiEdgeIndex>,
         color: ColorFlag,
-        ignored_edges: &mut num_bigint::BigUint,
+        ignored_edges: &mut yabf::Yabf,
     ) {
         self.diagram.edge_or_color(edge_id, color.bits);
         if let Some(edge_id) = edge_id {
-            ignored_edges.set_bit(edge_id.0 as u64, true);
+            ignored_edges.set_bit(edge_id.0, true);
         }
     }
 
@@ -651,7 +651,7 @@ where
         &self,
         edge_id: Option<VD::VoronoiEdgeIndex>,
         color: ColorFlag,
-        ignored_edges: &mut num_bigint::BigUint,
+        ignored_edges: &mut yabf::Yabf,
     ) {
         if edge_id.is_none() || Self::is_edge_rejected(edge_id, ignored_edges) {
             return;
@@ -693,7 +693,7 @@ where
             assert_eq!(edge_id.0, it.0);
 
             // could not use that an iter().filter() because of the BC
-            if used_edges.bit(edge_id.0 as u64) {
+            if used_edges.bit(edge_id.0) {
                 continue;
             }
 
@@ -728,18 +728,18 @@ where
     fn mark_edge_and_twin_as_used(
         &self,
         edge_id: VD::VoronoiEdgeIndex,
-        used_edges: &mut num_bigint::BigUint,
+        used_edges: &mut yabf::Yabf,
     ) {
-        used_edges.set_bit(edge_id.0 as u64, true);
+        used_edges.set_bit(edge_id.0, true);
         #[cfg(feature = "console_debug")]
         print!("marking {}", edge_id.0);
         if let Some(twin) = self.diagram.edge_get_twin(Some(edge_id)) {
             #[cfg(feature = "console_debug")]
             print!(" & {}", twin.0);
-            if used_edges.bit(twin.0 as u64) {
+            if used_edges.bit(twin.0) {
                 print!(" TWIN was already used!!!!!");
             }
-            used_edges.set_bit(twin.0 as u64, true);
+            used_edges.set_bit(twin.0, true);
         }
     }
 
@@ -747,8 +747,8 @@ where
     fn traverse_edge(
         &self,
         seed_edge: VD::VoronoiEdgeIndex,
-        ignored_edges: &mut num_bigint::BigUint,
-        used_edges: &mut num_bigint::BigUint,
+        ignored_edges: &mut yabf::Yabf,
+        used_edges: &mut yabf::Yabf,
         lines: &mut Vec<Line3<F1>>,
         linestrings: &mut Vec<LineString3<F1>>,
         maxdist: F1,
@@ -763,7 +763,7 @@ where
         let count = self
             .diagram
             .edge_rot_next_iterator(Some(seed_edge))
-            .filter(|x| !ignored_edges.bit(x.0 as u64))
+            .filter(|x| !ignored_edges.bit(x.0))
             .count();
         if count == 1 {
             let mut start_points = VecDeque::<VD::VoronoiEdgeIndex>::default();
@@ -785,8 +785,8 @@ where
                     print!(
                         "now looking at {} i:{} u:{} ({:5.3},{:.3})->({:.3},{:.3})",
                         edge.0,
-                        ignored_edges.bit(edge.0 as u64),
-                        used_edges.bit(edge.0 as u64),
+                        ignored_edges.bit(edge.0),
+                        used_edges.bit(edge.0),
                         v0.x(),
                         v0.y(),
                         v1.x(),
@@ -794,11 +794,11 @@ where
                     );
                 }
 
-                if ignored_edges.bit(edge.0 as u64) {
+                if ignored_edges.bit(edge.0) {
                     // Should never happen
                     panic!();
                 }
-                if used_edges.bit(edge.0 as u64) {
+                if used_edges.bit(edge.0) {
                     #[cfg(feature = "console_debug")]
                     print!(" skip");
                     // edge was already processed, continue
@@ -819,7 +819,7 @@ where
                     let next_edges: Vec<VD::VoronoiEdgeIndex> = self
                         .diagram
                         .edge_rot_next_iterator(next_edge_o)
-                        .filter(|x| !ignored_edges.bit(x.0 as u64))
+                        .filter(|x| !ignored_edges.bit(x.0))
                         .collect();
 
                     #[cfg(feature = "console_debug")]
@@ -827,7 +827,7 @@ where
                         print!("candidates[");
 
                         for ne in next_edges.iter() {
-                            if used_edges.bit(ne.0 as u64) {
+                            if used_edges.bit(ne.0) {
                                 print!("!");
                             }
                             print!("{},", ne.0);
@@ -838,7 +838,7 @@ where
                         1 | 2 => {
                             let next_edges: Vec<VD::VoronoiEdgeIndex> = next_edges
                                 .into_iter()
-                                .filter(|x| !used_edges.bit(x.0 as u64))
+                                .filter(|x| !used_edges.bit(x.0))
                                 .collect();
                             if next_edges.len() == 1 {
                                 // continue walking the edge line
@@ -863,8 +863,8 @@ where
                                     #[cfg(feature = "console_debug")]
                                     print!("1|2 Pushing new start points: [");
                                     for e in next_edges.iter() {
-                                        if !ignored_edges.bit(e.0 as u64)
-                                            && !used_edges.bit(e.0 as u64)
+                                        if !ignored_edges.bit(e.0)
+                                            && !used_edges.bit(e.0)
                                         {
                                             #[cfg(feature = "console_debug")]
                                             print!("{},", e.0);
@@ -892,7 +892,7 @@ where
                                 #[cfg(feature = "console_debug")]
                                 print!("0|_ Pushing new start points: [");
                                 for e in next_edges.iter() {
-                                    if !ignored_edges.bit(e.0 as u64) && !used_edges.bit(e.0 as u64)
+                                    if !ignored_edges.bit(e.0) && !used_edges.bit(e.0)
                                     {
                                         #[cfg(feature = "console_debug")]
                                         print!("{},", e.0);
