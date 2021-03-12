@@ -3,13 +3,10 @@
 #![deny(non_upper_case_globals)]
 #![deny(unused_qualifications)]
 #![deny(unused_results)]
-//#![deny(unused_imports)]
+#![deny(unused_imports)]
 #![allow(unused_imports)]
 #![feature(hash_drain_filter)]
 #![feature(test)]
-
-#[cfg(test)]
-mod bench;
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;

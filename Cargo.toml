@@ -12,7 +12,6 @@ keywords = ["geometry"]
 [dependencies]
 num = "^0.4.0"
 fnv = "^1.0.7"
-rb_tree = "^0.3.3"
 vec_map = "^0.8.2"
 num-traits = "^0.2.14"
 yabf = {version="^0.0.3",default-features=false}
@@ -41,6 +40,11 @@ path = "example/cli.rs"
 fltk = "^0.15.5"
 itertools = "^0.10.0"
 ordered-float = "^2.1.1"
+criterion = "^0.3.4"
 
 [features]
 console_debug = []
+
+[[bench]]
+name = "bench"
+harness = false

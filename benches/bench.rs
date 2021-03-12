@@ -1,11 +1,10 @@
-extern crate test;
-use crate::{Centerline, CenterlineError};
+use criterion::{criterion_group, criterion_main, Criterion};
+
 use boostvoronoi::Line;
-use test::Bencher;
+use centerline::Centerline;
 
 #[cfg(test)]
-#[bench]
-fn bench_1(b: &mut Bencher) -> Result<(), CenterlineError> {
+fn bench_1(c: &mut Criterion) {
     let segments: [[i32; 4]; 352] = [
         [402, 20, 395, 20],
         [408, 23, 402, 20],
@@ -363,25 +362,17 @@ fn bench_1(b: &mut Bencher) -> Result<(), CenterlineError> {
     let segments: Vec<Line<i32>> = segments.iter().map(|x| x.into()).collect();
 
     let mut centerline = Centerline::<i32, f32, i64, f64>::with_segments(segments);
-    centerline.build_voronoi()?;
-    println!(
-        "Result: cells:{}, edges:{}, vertices:{}",
-        centerline.diagram().cells().len(),
-        centerline.diagram().edges().len(),
-        centerline.diagram().vertices().len()
-    );
-    let normalized_dot_product_limit: f32 = 0.38;
-    let centerline_simplification: f32 = 0.1;
-    let _ =
-        centerline.calculate_centerline(normalized_dot_product_limit, centerline_simplification)?;
-    println!(
-        "Result: lines:{}, line_strings:{}",
-        centerline.lines.as_ref().map_or(0, |x| x.len()),
-        centerline.line_strings.as_ref().map_or(0, |x| x.len())
-    );
-    b.iter(move || {
-        let _ = centerline.calculate_centerline(0.38, 0.1);
+    c.bench_function("bench1", |b| {
+        b.iter(|| {
+            centerline.build_voronoi().expect("bench_1");
+            let normalized_dot_product_limit: f32 = 0.38;
+            let centerline_simplification: f32 = 0.1;
+            let _ = centerline
+                .calculate_centerline(normalized_dot_product_limit, centerline_simplification)
+                .expect("bench_1");
+        })
     });
-
-    Ok(())
 }
+
+criterion_group!(benches1, bench_1);
+criterion_main!(benches1);
