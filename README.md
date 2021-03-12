@@ -4,7 +4,7 @@
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
 [![dependency status](https://deps.rs/crate/centerline/0.0.2/status.svg)](https://deps.rs/crate/centerline/0.0.2)
 
-#Centerline
+# Centerline
 
 Finds 'a' centerline of closed 2D geometries.
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 
@@ -26,7 +26,7 @@ println!(
 );
 ```
 
-##Gui example
+## Gui example
 
 ```fish
 cargo +nightly run --example fltk_gui
@@ -37,7 +37,7 @@ The Z coordinate is the distance between the 2D centerline and the geometry that
 It should be possible to replace the example input data by overwriting the ```rust.obj``` file in the ```example``` folder.
 The new .obj file just needs to be 2D in some axis aligned plane.
 
-##Rust requirement
+## Rust requirement
 
 Requires ```#![feature(hash_drain_filter)]``` i.e. ```+nightly```
 
