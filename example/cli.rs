@@ -20,7 +20,9 @@ fn main() -> Result<(), CenterlineError> {
     );
 
     let rejected_edges = centerline.rejected_edges().unwrap();
-    centerline.diagram().debug_print_all(|x:usize|!rejected_edges.bit(x));
+    centerline
+        .diagram()
+        .debug_print_all(|x: usize| !rejected_edges.bit(x));
 
     for (eid, e) in centerline
         .diagram()
@@ -30,8 +32,15 @@ fn main() -> Result<(), CenterlineError> {
         .filter(|(i, _)| !rejected_edges.bit(*i))
     {
         let twin = centerline.diagram().edge_get_twin(Some(e.get().get_id()));
-        let twin_i:Vec<bool> = twin.iter().map(|x| rejected_edges.bit(x.0)).collect();
-        print!("edge#{} {:?} {} {:?} {:?}", eid, e, rejected_edges.bit(eid), twin, twin_i.first());
+        let twin_i: Vec<bool> = twin.iter().map(|x| rejected_edges.bit(x.0)).collect();
+        print!(
+            "edge#{} {:?} {} {:?} {:?}",
+            eid,
+            e,
+            rejected_edges.bit(eid),
+            twin,
+            twin_i.first()
+        );
         let eid = Some(e.get().get_id());
         let v0 = centerline.diagram().edge_get_vertex0(eid).unwrap();
         let v0 = centerline.diagram().vertex_get(Some(v0)).unwrap().get();
@@ -42,7 +51,16 @@ fn main() -> Result<(), CenterlineError> {
         let is_secondary = e.get().is_secondary();
         let is_curved = e.get().is_curved();
 
-        println!(" ({:5.3},{:.3})-({:.3},{:.3}) v1:{} secondary:{} curved:{}", v0.x(), v0.y(), v1.x(), v1.y(), v1.get_id().0, is_secondary, is_curved);
+        println!(
+            " ({:5.3},{:.3})-({:.3},{:.3}) v1:{} secondary:{} curved:{}",
+            v0.x(),
+            v0.y(),
+            v1.x(),
+            v1.y(),
+            v1.get_id().0,
+            is_secondary,
+            is_curved
+        );
     }
 
     centerline.calculate_centerline(0.0001, 0.1)?;

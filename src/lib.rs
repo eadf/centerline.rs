@@ -447,7 +447,7 @@ where
 
     /// Color exterior edges also rejects secondary edges
     fn reject_edges(&mut self) {
-        let mut rejected_edges= yabf::Yabf::default();
+        let mut rejected_edges = yabf::Yabf::default();
         // ensure capacity of bit field by setting last bit +1 to true
         rejected_edges.set_bit(self.diagram().edges().len(), true);
 
@@ -606,10 +606,7 @@ where
 
     /// check if an edge is rejected based on the ignored_edges map
     #[inline(always)]
-    fn is_edge_rejected(
-        edge_id: Option<VD::VoronoiEdgeIndex>,
-        ignored_edges: &yabf::Yabf,
-    ) -> bool {
+    fn is_edge_rejected(edge_id: Option<VD::VoronoiEdgeIndex>, ignored_edges: &yabf::Yabf) -> bool {
         if let Some(edge_id_u) = edge_id {
             ignored_edges.bit(edge_id_u.0)
         } else {
@@ -863,9 +860,7 @@ where
                                     #[cfg(feature = "console_debug")]
                                     print!("1|2 Pushing new start points: [");
                                     for e in next_edges.iter() {
-                                        if !ignored_edges.bit(e.0)
-                                            && !used_edges.bit(e.0)
-                                        {
+                                        if !ignored_edges.bit(e.0) && !used_edges.bit(e.0) {
                                             #[cfg(feature = "console_debug")]
                                             print!("{},", e.0);
                                             start_points.push_back(*e);
@@ -892,8 +887,7 @@ where
                                 #[cfg(feature = "console_debug")]
                                 print!("0|_ Pushing new start points: [");
                                 for e in next_edges.iter() {
-                                    if !ignored_edges.bit(e.0) && !used_edges.bit(e.0)
-                                    {
+                                    if !ignored_edges.bit(e.0) && !used_edges.bit(e.0) {
                                         #[cfg(feature = "console_debug")]
                                         print!("{},", e.0);
                                         start_points.push_back(*e);

@@ -55,9 +55,9 @@ use fltk::*;
 use fltk::{app, draw::*, frame::*};
 
 use cgmath;
-use linestring::cgmath_2d::{LineStringSet2};
+use linestring::cgmath_2d::LineStringSet2;
 use linestring::cgmath_3d;
-use linestring::cgmath_3d::{LineString3};
+use linestring::cgmath_3d::LineString3;
 use obj;
 use ordered_float::OrderedFloat;
 //use rayon::prelude::*;
@@ -317,7 +317,8 @@ fn main() -> Result<(), CenterlineError> {
 /// Re-calculate the center-line and all of the other parameters
 /// Todo: rayon the whole chain per shape
 fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
-    #[cfg(feature = "console_debug")] {
+    #[cfg(feature = "console_debug")]
+    {
         println!("***********************");
         println!("re_calculate()");
     }
@@ -432,16 +433,18 @@ fn simplify_centerline(
 ) -> Result<(), CenterlineError> {
     #[cfg(feature = "console_debug")]
     println!("simplify_centerline()");
-    let mut simplified_centerline = if let Some(simplified_centerline) = shape.simplified_centerline.take(){
-        simplified_centerline
-    } else {
-        Vec::<LineString3<f32>>::new()
-    };
+    let mut simplified_centerline =
+        if let Some(simplified_centerline) = shape.simplified_centerline.take() {
+            simplified_centerline
+        } else {
+            Vec::<LineString3<f32>>::new()
+        };
     simplified_centerline.clear();
     if let Some(ref centerline) = shape.centerline {
         if let Some(ref line_strings) = centerline.line_strings {
             for ls in line_strings.iter() {
-                simplified_centerline.push(ls.simplify(configuration.centerline_distance * 1024_f32.sqrt()));
+                simplified_centerline
+                    .push(ls.simplify(configuration.centerline_distance * 1024_f32.sqrt()));
             }
         }
     }

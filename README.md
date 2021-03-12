@@ -18,7 +18,10 @@ makes for much cleaner tool-paths etc.
 let segments = ...same as boost voronoi segments...
 let mut centerline = Centerline::<i32, f32, i64, f64>::with_segments(segments);
 centerline.build_voronoi()?;
-let _= centerline.calculate_centerline(0.38, 0.1)?;
+let normalized_dot_product_limit:f32 = 0.38;
+let centerline_simplification:f32 = 0.1;
+
+let _= centerline.calculate_centerline(normalized_dot_product_limit, centerline_simplification)?;
 println!(
    "Result: lines:{}, line_strings:{}",
    centerline.lines.as_ref().map_or(0,|x|x.len()),
