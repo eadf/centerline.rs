@@ -4,10 +4,11 @@
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
 [![dependency status](https://deps.rs/crate/centerline/0.0.2/status.svg)](https://deps.rs/crate/centerline/0.0.2)
 
-#Centerline 
+#Centerline
+
 Finds 'a' centerline of closed 2D geometries.
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 
-'spiky' bits by comparing the dot product of the voronoi edge and the input geometry that created it.
+'spiky' bits (green) by comparing the dot product of the voronoi edge and the input geometry (red) that created it.
 Note that the result technically is not a true centerline after the spikes has been filtered out, but it 
 makes for much cleaner tool-paths etc. 
 
@@ -24,7 +25,9 @@ println!(
    centerline.line_strings.as_ref().map_or(0,|x|x.len())
 );
 ```
+
 ##Gui example
+
 ```fish
 cargo +nightly run --example fltk_gui
 ```
@@ -35,5 +38,6 @@ It should be possible to replace the example input data by overwriting the ```ru
 The new .obj file just needs to be 2D in some axis aligned plane.
 
 ##Rust requirement
+
 Requires ```#![feature(hash_drain_filter)]``` i.e. ```+nightly```
 
