@@ -445,7 +445,7 @@ where
         &self.diagram
     }
 
-    /// Color exterior edges also rejects secondary edges
+    /// Color exterior edges also rejects some secondary edges
     fn reject_edges(&mut self) {
         let mut rejected_edges = yabf::Yabf::default();
         // ensure capacity of bit field by setting last bit +1 to true

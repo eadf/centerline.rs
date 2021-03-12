@@ -10,7 +10,7 @@ Finds 'a' centerline of closed 2D geometries.
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 
 'spiky' bits (green) by comparing the angle between the edge (green), and the input geometry (red) that created it.
 If the angle is close to 90°, it will be ignored. Note that the result (blue) technically is not a true centerline after the spikes has been filtered out, but it 
-makes for much cleaner tool-paths etc. 
+makes for much cleaner tool-paths etc. It also performs a line simplification on the resulting center-line. 
 
 ![unfiltered](unfiltered.png) ![filtered](filtered.png)
 
@@ -38,7 +38,7 @@ The example only displays 2D, but the generated center-line is actually 3D line 
 The Z coordinate is the distance between the 2D center-line, and the geometry that created it. 
 
 It should be possible to replace the example input data by overwriting the ```rust.obj``` file in the ```example``` folder.
-The new .obj file just needs to be 2D in some axis aligned plane.
+The new .obj file just needs to be 2D in some axis aligned plane. Make sure there are no intersecting outer edges though.
 
 ## Rust requirement
 
@@ -50,3 +50,5 @@ Requires ```#![feature(hash_drain_filter)]``` i.e. ```+nightly```
 - [ ] Rayon over each shape group (problem: boostvoronoi diagrams uses std::cell::Cell)
 - [ ] Open file dialogue for fltk_gui
 - [ ] Maybe, maybe make it possible to save result from fltk_gui :)
+- [ ] Make an option to remove inner center-lines of inner shapes. I.e. the holes in letters.
+- [ ] Add opengl to fltk_gui so that the 3D aspect of the center-line can be visualized. 
