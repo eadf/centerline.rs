@@ -613,7 +613,7 @@ fn get_transform(
     println!("0 Center {:?} low:{:?}, high:{:?}", center, low, high);
 
     let scale_transform = {
-        let scale = 1024.0 * 700.0
+        let scale = 1024.0 * (HF.min(WF)  as f32 -10.0)
             / std::cmp::max(
                 std::cmp::max(OrderedFloat(high.x - low.x), OrderedFloat(high.y - low.y)),
                 OrderedFloat(high.z - low.z),
