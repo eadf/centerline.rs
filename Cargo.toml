@@ -15,13 +15,13 @@ fnv = "^1.0.7"
 rb_tree = "^0.3.3"
 vec_map = "^0.8.2"
 num-traits = "^0.2.14"
-yabf = {version="^0.0.2",default-features=false}
+yabf = {version="^0.0.3",default-features=false}
 #boostvoronoi = "^0.4.2"
 #boostvoronoi = {path = "../boostvoronoi.rs"}
 boostvoronoi = { git = "https://github.com/eadf/boostvoronoi.rs" }
-#linestring = {version="^0.0.10",default-features=false,features=["impl-cgmath"]}
+linestring = {version="^0.0.11",default-features=false,features=["impl-cgmath"]}
 #linestring = {path = "../linestring.rs",default-features=false,features=["impl-cgmath"]}
-linestring = { git = "https://github.com/eadf/linestring.rs",default-features=false,features=["impl-cgmath"]}
+#linestring = { git = "https://github.com/eadf/linestring.rs",default-features=false,features=["impl-cgmath"]}
 cgmath = "^0.18.0"
 approx = "^0.4.0"
 obj-rs = "^0.6.2"
