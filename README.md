@@ -8,8 +8,8 @@
 
 Finds 'a' centerline of closed 2D geometries.
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 
-'spiky' bits (green) by comparing the dot product of the voronoi edge and the input geometry (red) that created it.
-Note that the result technically is not a true centerline after the spikes has been filtered out, but it 
+'spiky' bits (green) by comparing the angle between the edge (green), and the input geometry (red) that created it.
+If the angle is close to 90°, it will be ignored. Note that the result (blue) technically is not a true centerline after the spikes has been filtered out, but it 
 makes for much cleaner tool-paths etc. 
 
 ![unfiltered](unfiltered.png) ![filtered](filtered.png)
@@ -31,8 +31,8 @@ println!(
 ```fish
 cargo +nightly run --example fltk_gui
 ```
-The example only displays 2D, but the generated centerline is actually 3D line segments.\
-The Z coordinate is the distance between the 2D centerline and the geometry that created it. 
+The example only displays 2D, but the generated center-line is actually 3D line segments.\
+The Z coordinate is the distance between the 2D center-line, and the geometry that created it. 
 
 It should be possible to replace the example input data by overwriting the ```rust.obj``` file in the ```example``` folder.
 The new .obj file just needs to be 2D in some axis aligned plane.
