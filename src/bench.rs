@@ -370,9 +370,9 @@ fn bench_1(b: &mut Bencher) -> Result<(), CenterlineError> {
         centerline.diagram().edges().len(),
         centerline.diagram().vertices().len()
     );
-    let _= centerline.calculate_centerline(0.38, 0.1);
+    let _= centerline.calculate_centerline(0.38, 0.1)?;
     println!(
-        "Result: lines:{}, linsestrings:{}",
+        "Result: lines:{}, line_strings:{}",
         centerline.lines.as_ref().map_or(0,|x|x.len()),
         centerline.line_strings.as_ref().map_or(0,|x|x.len())
     );
