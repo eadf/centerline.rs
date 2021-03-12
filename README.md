@@ -41,3 +41,9 @@ The new .obj file just needs to be 2D in some axis aligned plane.
 
 Requires ```#![feature(hash_drain_filter)]``` i.e. ```+nightly```
 
+## Todo
+
+- [ ] Group related shapes together based on convex hull and not just AABB
+- [ ] Rayon over each shape group (problem: boostvoronoi diagrams uses std::cell::Cell)
+- [ ] Open file dialogue for fltk_gui
+- [ ] Maybe, maybe make it possible to save result from fltk_gui :)
