@@ -10,9 +10,8 @@
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;
-use boostvoronoi::{BigFloatType, BigIntType, InputType, OutputType, TypeConverter};
+use boostvoronoi::{BigFloatType, BigIntType, InputType, OutputType, TypeConverter2};
 
-use boostvoronoi::builder::Builder;
 use cgmath::InnerSpace;
 use linestring::cgmath_2d;
 use linestring::cgmath_2d::{Line2, VoronoiParabolicArc};
@@ -337,6 +336,11 @@ pub fn remove_internal_edges(
     Ok(rv)
 }
 
+/// Center line calculation object.
+/// It: * calculates the segmented voronoi diagram.
+///     * Filter out voronoi edges based on the angle to input geometry.
+///     * Collects connected edges into line strings and line segments.
+///     * Performs line simplification on those line strings.
 pub struct Centerline<I1, F1, I2, F2>
 where
     I1: InputType + Neg<Output = I1>,
@@ -344,17 +348,22 @@ where
     I2: BigIntType + Neg<Output = I2>,
     F2: BigFloatType + Neg<Output = F2>,
 {
-    // the input data to the voronoi diagram
+    /// the input data to the voronoi diagram
     pub segments: Vec<boostvoronoi::Line<I1>>,
-    // the voronoi diagram itself
+    /// the voronoi diagram itself
     pub diagram: VD::VoronoiDiagram<I1, F1, I2, F2>,
+    /// the individual two-point edges
     pub lines: Option<Vec<Line3<F1>>>,
+    /// concatenated connected edges
     pub line_strings: Option<Vec<LineString3<F1>>>,
 
     /// bit field defining edges rejected by EXTERNAL or INFINITE
     rejected_edges: Option<yabf::Yabf>,
     /// bit field defining edges rejected by 'rejected_edges' + dot test
     ignored_edges: Option<yabf::Yabf>,
+
+    #[cfg(feature = "console_debug")]
+    pub debug_edges: Option<fnv::FnvHashMap<usize, [F1; 4]>>,
 }
 
 impl<I1, F1, I2, F2> Centerline<I1, F1, I2, F2>
@@ -373,6 +382,8 @@ where
             line_strings: Some(Vec::<LineString3<F1>>::new()),
             rejected_edges: None,
             ignored_edges: None,
+            #[cfg(feature = "console_debug")]
+            debug_edges: None,
         }
     }
 
@@ -385,11 +396,22 @@ where
             line_strings: Some(Vec::<LineString3<F1>>::new()),
             rejected_edges: None,
             ignored_edges: None,
+            #[cfg(feature = "console_debug")]
+            debug_edges: None,
         }
     }
 
+    /// builds the voronoi diagram and filter out infinite edges and other 'outside' geometry
     pub fn build_voronoi(&mut self) -> Result<(), CenterlineError> {
-        let mut vb = Builder::new();
+        let mut vb = VB::Builder::new();
+        //#[cfg(feature = "console_debug")]
+        {
+            print!("build_voronoi()-> input segments:[");
+            for s in self.segments.iter() {
+                print!("[{},{},{},{}],", s.start.x, s.start.y, s.end.x, s.end.y);
+            }
+            println!("];");
+        }
         vb.with_segments(self.segments.iter())?;
         self.diagram = vb.construct()?;
         self.reject_edges();
@@ -402,6 +424,8 @@ where
         Ok(())
     }
 
+    /// perform the angle-to-geometry test and filter out some edges.
+    /// Collect the rest of the edges into connected line-strings and line segments.
     pub fn calculate_centerline(
         &mut self,
         dot_limit: F1,
@@ -438,10 +462,12 @@ where
         self.segments[cell.source_index()]
     }
 
+    /// returns a reference to the internal voronoi diagram
     pub fn diagram(&self) -> &VD::VoronoiDiagram<I1, F1, I2, F2> {
         &self.diagram
     }
 
+    /// Mark infinite edges and their adjacent edges as EXTERNAL.
     /// Color exterior edges also rejects some secondary edges
     fn reject_edges(&mut self) {
         let mut rejected_edges = yabf::Yabf::default();
@@ -587,8 +613,7 @@ where
             // todo better to compare to the square of the dot product, fewer operations.
             let segment_v = (s_point_1 - s_point_0).normalize();
             let vertex_v = (vertex1 - vertex0).normalize();
-            let dot_product = segment_v.dot(vertex_v).abs();
-            if dot_product < dot_limit {
+            if segment_v.dot(vertex_v).abs() < dot_limit {
                 if let Some(twin) = self.diagram.edge_get_twin(edge) {
                     ignored_edges.set_bit(twin.0, true);
                 }
@@ -650,15 +675,23 @@ where
         if edge_id.is_none() || Self::is_edge_rejected(edge_id, ignored_edges) {
             return;
         }
+
+        let v0 = self.diagram.edge_get_vertex0(edge_id);
+        let v1 = self.diagram.edge_get_vertex1(edge_id);
+        if v0.is_some() && v1.is_none() {
+            // this edge leads to nowhere, break recursion
+            self.reject_edge(edge_id, color, ignored_edges);
+            return
+        }
         self.reject_edge(edge_id, color, ignored_edges);
         self.reject_edge(self.diagram.edge_get_twin(edge_id), color, ignored_edges);
-        let v = self.diagram.edge_get_vertex1(edge_id);
-        if v.is_none() || !self.diagram.get_edge(edge_id.unwrap()).get().is_primary() {
+
+        if v1.is_none() || !self.diagram.get_edge(edge_id.unwrap()).get().is_primary() {
             // break recursion if vertex1 is not found or it the edge is primary
             return;
         }
-        self.reject_vertex(v, color);
-        let mut e = self.diagram.vertex_get_incident_edge(v);
+        self.reject_vertex(v1, color);
+        let mut e = self.diagram.vertex_get_incident_edge(v1);
         let v_incident_edge = e;
         while e.is_some() {
             self.recursively_reject_edge(e, color, ignored_edges);
@@ -678,13 +711,21 @@ where
         // operate on a copy of self.ignored_edges
         let mut ignored_edges = self.ignored_edges.clone().take().unwrap();
         let mut used_edges = ignored_edges.clone();
+        #[cfg(feature = "console_debug")]
+        let mut edge_lines = fnv::FnvHashMap::<usize, [F1; 4]>::default();
 
         linestrings.clear();
         lines.clear();
 
         for it in self.diagram.edges().iter().enumerate() {
             let edge_id = VD::VoronoiEdgeIndex(it.0);
-            assert_eq!(edge_id.0, it.0);
+
+            #[cfg(feature = "console_debug")]
+            if !ignored_edges.bit(edge_id.0) {
+                if let Some(line) = self.diagram.edge_as_line(Some(edge_id)) {
+                    let _ = edge_lines.insert(edge_id.0, line);
+                }
+            }
 
             // could not use that an iter().filter() because of the BC
             if used_edges.bit(edge_id.0) {
@@ -715,6 +756,10 @@ where
         // put the containers back
         self.lines = Some(lines);
         self.line_strings = Some(linestrings);
+        #[cfg(feature = "console_debug")]
+        {
+            self.debug_edges = Some(edge_lines);
+        }
     }
 
     /// Mark an edge and it's twin as used/rejected
@@ -906,10 +951,16 @@ where
                 }
             }
             #[cfg(feature = "console_debug")]
-            {
-                println!("mockups");
-                for m in mockup.iter() {
-                    println!("mockup {:?}", m.iter().map(|x| x.0).collect::<Vec<usize>>());
+            for m in mockup.iter() {
+                println!("mockup {:?}", m.iter().map(|x| x.0).collect::<Vec<usize>>());
+
+                let mut i1 = m.iter();
+                for e2 in m.iter().skip(1) {
+                    let e1 = i1.next().unwrap();
+                    assert_eq!(
+                        self.diagram.edge_get_vertex1(Some(*e1)),
+                        self.diagram.edge_get_vertex0(Some(*e2))
+                    );
                 }
             }
         } else {
@@ -920,7 +971,7 @@ where
                 count,
                 self.diagram
                     .edge_rot_next_iterator(Some(seed_edge))
-                    .filter(|x| !ignored_edges.bit(x.0 as u64))
+                    .filter(|x| !ignored_edges.bit(x.0))
                     .map(|x| x.0)
                     .collect::<Vec<usize>>()
             );

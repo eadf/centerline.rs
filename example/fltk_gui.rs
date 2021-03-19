@@ -153,7 +153,7 @@ fn main() -> Result<(), CenterlineError> {
         configuration: Configuration {
             window_center: (WF / 2, HF / 2),
             centerline_distance: 0.0,
-            centerline_scaled_distance: 1000.0,
+            centerline_scaled_distance: 256.0,
             centerline_distance_dirty: true,
             normalized_dot: 0.38,
             normalized_dot_dirty: true,
@@ -213,17 +213,18 @@ fn main() -> Result<(), CenterlineError> {
         if let Some(vec_shapes) = opt_shapes {
             for shape in vec_shapes.iter() {
                 if let Some(ref centerline) = shape.centerline {
+                    draw::set_line_style(LineStyle::Solid, 2);
                     draw::set_draw_color(Color::Red);
                     for a_line in centerline.segments.iter() {
-                        // The scaling transform is already multiplied by 1024
+                        // The scaling transform is already multiplied by 256
                         let x1 =
-                            (a_line.start.x >> 10) as i32 + data_bm.configuration.window_center.0;
+                            (a_line.start.x >> 8) as i32 + data_bm.configuration.window_center.0;
                         let y1 =
-                            (a_line.start.y >> 10) as i32 + data_bm.configuration.window_center.1;
+                            (a_line.start.y >> 8) as i32 + data_bm.configuration.window_center.1;
                         let x2 =
-                            (a_line.end.x >> 10) as i32 + data_bm.configuration.window_center.0;
+                            (a_line.end.x >> 8) as i32 + data_bm.configuration.window_center.0;
                         let y2 =
-                            (a_line.end.y >> 10) as i32 + data_bm.configuration.window_center.1;
+                            (a_line.end.y >> 8) as i32 + data_bm.configuration.window_center.1;
                         draw::draw_line(x1, y1, x2, y2);
                         match data_bm.configuration.last_message {
                             Some(GuiMessage::SliderPreChanged(_)) => {
@@ -233,17 +234,18 @@ fn main() -> Result<(), CenterlineError> {
                             _ => (),
                         }
                     }
-                    draw::set_draw_color(Color::Green);
+                    draw::set_line_style(LineStyle::Solid, 1);
+                    draw::set_draw_color(Color::Black);
                     for a_line in centerline.lines.iter().flatten() {
-                        // The scaling transform is already multiplied by 1024
+                        // The scaling transform is already multiplied by 256
                         let x1 =
-                            ((a_line.start.x as i32) >> 10) + data_bm.configuration.window_center.0;
+                            ((a_line.start.x as i32) >> 8) + data_bm.configuration.window_center.0;
                         let y1 =
-                            ((a_line.start.y as i32) >> 10) + data_bm.configuration.window_center.1;
+                            ((a_line.start.y as i32) >> 8) + data_bm.configuration.window_center.1;
                         let x2 =
-                            ((a_line.end.x as i32) >> 10) + data_bm.configuration.window_center.0;
+                            ((a_line.end.x as i32) >> 8) + data_bm.configuration.window_center.0;
                         let y2 =
-                            ((a_line.end.y as i32) >> 10) + data_bm.configuration.window_center.1;
+                            ((a_line.end.y as i32) >> 8) + data_bm.configuration.window_center.1;
                         draw::draw_line(x1, y1, x2, y2);
                     }
                     draw::set_draw_color(Color::Blue);
@@ -252,14 +254,14 @@ fn main() -> Result<(), CenterlineError> {
                         //let lines = an_arc.discretise_2d(1000.0);
                         //println!("an_arc.len()={:?}", lines.points().len() );
                         for a_line in a_linestring.as_lines().iter() {
-                            // The scaling transform is already multiplied by 1024
-                            let x1 = ((a_line.start.x as i32) >> 10)
+                            // The scaling transform is already multiplied by 256
+                            let x1 = ((a_line.start.x as i32) >> 8)
                                 + data_bm.configuration.window_center.0;
-                            let y1 = ((a_line.start.y as i32) >> 10)
+                            let y1 = ((a_line.start.y as i32) >> 8)
                                 + data_bm.configuration.window_center.1;
-                            let x2 = ((a_line.end.x as i32) >> 10)
+                            let x2 = ((a_line.end.x as i32) >> 8)
                                 + data_bm.configuration.window_center.0;
-                            let y2 = ((a_line.end.y as i32) >> 10)
+                            let y2 = ((a_line.end.y as i32) >> 8)
                                 + data_bm.configuration.window_center.1;
                             draw::draw_line(x1, y1, x2, y2);
                             match data_bm.configuration.last_message {
@@ -271,7 +273,33 @@ fn main() -> Result<(), CenterlineError> {
                             }
                         }
                     }
-                    //println!("draw: {} lines", centerline.lines.len());
+                    #[cfg(feature = "console_debug")]
+                    if let Some(ref centerline) = shape.centerline {
+                        draw::set_draw_color(Color::Black);
+                        if let Some(ref debug_edges) = centerline.debug_edges {
+                            for e in debug_edges
+                                .iter()
+                                .map(|x| x.0)
+                                .sorted_unstable()
+                                .map(|x| debug_edges.get_key_value(x))
+                            {
+                                let (e, l) = e.unwrap();
+                                let x1 =
+                                    ((l[0] as i32) >> 8) + data_bm.configuration.window_center.0;
+                                let y1 =
+                                    ((l[1] as i32) >> 8) + data_bm.configuration.window_center.1;
+                                let x2 =
+                                    ((l[2] as i32) >> 8) + data_bm.configuration.window_center.0;
+                                let y2 =
+                                    ((l[3] as i32) >> 8) + data_bm.configuration.window_center.1;
+                                draw::draw_line(x1, y1, x2, y2);
+                                //let mid_x = (x1 + x2) / 2;
+                                //let mid_y = (y1 + y2) / 2;
+                                //draw_text(e.to_string().as_str(), x1, y1);
+                                //println!("drawing edge {}:({},{}),({},{})", e, x1, y1, x2, y2);
+                            }
+                        }
+                    }
                 }
             }
             data_bm.shapes = Some(vec_shapes);
@@ -444,7 +472,7 @@ fn simplify_centerline(
         if let Some(ref line_strings) = centerline.line_strings {
             for ls in line_strings.iter() {
                 simplified_centerline
-                    .push(ls.simplify(configuration.centerline_distance * 1024_f32.sqrt()));
+                    .push(ls.simplify(configuration.centerline_distance * 256_f32.sqrt()));
             }
         }
     }
@@ -468,7 +496,7 @@ fn recalculate_voronoi_input(
                 #[cfg(feature = "console_debug")]
                 let before = lines.len();
                 let s_lines =
-                    lines.simplify((configuration.input_distance as f32) * 1024_f32.sqrt());
+                    lines.simplify((configuration.input_distance as f32) * 256_f32.sqrt());
                 #[cfg(feature = "console_debug")]
                 println!(
                     "reduced by {} points of {} = {}",
@@ -517,7 +545,7 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     let mut data_bm = data.borrow_mut();
 
     let obj_set = {
-        let input = BufReader::new(File::open("example/rust.obj").unwrap());
+        let input = BufReader::new(File::open("example/logo.obj").unwrap());
         obj::raw::parse_obj(input)?
     };
 
@@ -590,8 +618,8 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
 }
 
 /// Calculate an affine transform that will center, flip plane to XY, and scale the arbitrary shape
-/// so that it will fill the screen. For good measure the scale is then multiplied by 1024 so the
-/// points makes half decent input data to boostvoronoi (integer input only)
+/// so that it will fill the screen. For good measure the scale is then multiplied by 256 so the
+/// points makes half decent input data to boost voronoi (integer input only)
 fn get_transform(
     total_aabb: &cgmath_3d::Aabb3<f32>,
 ) -> Result<(cgmath_3d::Plane, cgmath::Matrix4<f32>), CenterlineError> {
@@ -610,10 +638,10 @@ fn get_transform(
         (high.y + low.y) / 2.0,
         (high.z + low.z) / 2.0,
     );
-    println!("0 Center {:?} low:{:?}, high:{:?}", center, low, high);
+    println!("Obj file AABB: Center {:?} low:{:?}, high:{:?}", center, low, high);
 
     let scale_transform = {
-        let scale = 1024.0 * (HF.min(WF)  as f32 -10.0)
+        let scale = 256.0 * (HF.min(WF) as f32 - 10.0)
             / std::cmp::max(
                 std::cmp::max(OrderedFloat(high.x - low.x), OrderedFloat(high.y - low.y)),
                 OrderedFloat(high.z - low.z),
@@ -653,18 +681,18 @@ fn get_transform(
     let low0 = total_transform.transform_point(low0);
     let high0 = total_transform.transform_point(high0);
     let center0 = total_transform.transform_point(center0);
-    println!("T Center {:?} low:{:?}, high:{:?}", center0, low0, high0);
+    println!("Voronoi input AABB: Center {:?} low:{:?}, high:{:?}", center0, low0, high0);
 
     let inverse_total = total_transform.invert();
     if inverse_total.is_none() {
         return Err(CenterlineError::CouldNotCalculateInverseMatrix);
     }
-    let inverse_total = inverse_total.unwrap();
+    //let inverse_total = inverse_total.unwrap();
 
-    let low0 = inverse_total.transform_point(low0);
-    let high0 = inverse_total.transform_point(high0);
-    let center0 = inverse_total.transform_point(center0);
-    println!("I Center {:?} low:{:?}, high:{:?}", center0, low0, high0);
+    //let low0 = inverse_total.transform_point(low0);
+    //let high0 = inverse_total.transform_point(high0);
+    //let center0 = inverse_total.transform_point(center0);
+    //println!("I Center {:?} low:{:?}, high:{:?}", center0, low0, high0);
 
     Ok((plane, total_transform))
 }
