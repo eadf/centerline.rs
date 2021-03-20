@@ -676,9 +676,8 @@ where
             return;
         }
 
-        let v0 = self.diagram.edge_get_vertex0(edge_id);
         let v1 = self.diagram.edge_get_vertex1(edge_id);
-        if v0.is_some() && v1.is_none() {
+        if self.diagram.edge_get_vertex0(edge_id).is_some() && v1.is_none() {
             // this edge leads to nowhere, break recursion
             self.reject_edge(edge_id, color, ignored_edges);
             return

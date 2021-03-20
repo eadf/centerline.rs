@@ -6,6 +6,8 @@
 
 # Centerline
 
+![unfiltered](centerline.png)
+
 Finds 'a' centerline of closed 2D geometries.
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 
 'spiky' bits (green) by comparing the angle between the edge (green), and the input geometry (red) that created it.
