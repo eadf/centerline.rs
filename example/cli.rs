@@ -1,5 +1,4 @@
 use boostvoronoi::builder as VB;
-use boostvoronoi::Line;
 use centerline::{Centerline, CenterlineError};
 
 fn main() -> Result<(), CenterlineError> {
@@ -17,7 +16,7 @@ fn main() -> Result<(), CenterlineError> {
         [113416, 122601, 73916, 119690],
         [73916, 119690, -39092, 94519],
     ];
-    let segments = VB::to_segments_t::<i32>(&_test_segments, 1.0 / 1024.0, 350, 350);
+    let segments = VB::to_segments_offset::<i32,i32>(&_test_segments, 1.0 / 1024.0, 350, 350);
     let mut centerline = Centerline::<i32, f32, i64, f64>::with_segments(segments);
     centerline.build_voronoi()?;
     println!(
