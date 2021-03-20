@@ -6,7 +6,7 @@
 
 # Centerline
 
-![unfiltered](centerline.png)
+![centerline](centerline.png)
 
 Finds 'a' centerline of closed 2D geometries.
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 
