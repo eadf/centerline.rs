@@ -89,7 +89,7 @@ struct Shape {
     raw_data: LineStringSet2<f32>,
 
     // centerline.segments is the simplified version of 'raw_data', also input to boost voronoi
-    centerline: Option<Centerline<i32, f32, i64, f64>>,
+    centerline: Option<Centerline<i32, f32>>,
 
     simplified_centerline: Option<Vec<LineString3<f32>>>,
 }
@@ -385,7 +385,7 @@ fn threaded_re_calculate(
     configuration: Configuration,
 ) -> Result<Shape, CenterlineError> {
     if shape.centerline.is_none() {
-        shape.centerline = Some(Centerline::<i32, f32, i64, f64>::default());
+        shape.centerline = Some(Centerline::<i32, f32>::default());
     }
     let input_changed = if configuration.input_distance_dirty {
         recalculate_voronoi_input(&mut shape, configuration)?;

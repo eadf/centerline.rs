@@ -10,7 +10,7 @@
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;
-use boostvoronoi::{BigFloatType, BigIntType, InputType, OutputType, TypeConverter2};
+use boostvoronoi::{InputType, OutputType, TypeConverter};
 
 use cgmath::InnerSpace;
 use linestring::cgmath_2d;
@@ -341,17 +341,15 @@ pub fn remove_internal_edges(
 ///     * Filter out voronoi edges based on the angle to input geometry.
 ///     * Collects connected edges into line strings and line segments.
 ///     * Performs line simplification on those line strings.
-pub struct Centerline<I1, F1, I2, F2>
+pub struct Centerline<I1, F1>
 where
     I1: InputType + Neg<Output = I1>,
     F1: cgmath::BaseFloat + OutputType + Neg<Output = F1>,
-    I2: BigIntType + Neg<Output = I2>,
-    F2: BigFloatType + Neg<Output = F2>,
 {
     /// the input data to the voronoi diagram
     pub segments: Vec<boostvoronoi::Line<I1>>,
     /// the voronoi diagram itself
-    pub diagram: VD::VoronoiDiagram<I1, F1, I2, F2>,
+    pub diagram: VD::VoronoiDiagram<I1, F1>,
     /// the individual two-point edges
     pub lines: Option<Vec<Line3<F1>>>,
     /// concatenated connected edges
@@ -366,12 +364,10 @@ where
     pub debug_edges: Option<fnv::FnvHashMap<usize, [F1; 4]>>,
 }
 
-impl<I1, F1, I2, F2> Centerline<I1, F1, I2, F2>
+impl<I1, F1> Centerline<I1, F1>
 where
     I1: InputType + Neg<Output = I1>,
     F1: cgmath::BaseFloat + OutputType + Neg<Output = F1>,
-    I2: BigIntType + Neg<Output = I2>,
-    F2: BigFloatType + Neg<Output = F2>,
 {
     /// Creates a Centerline container with a set of segments
     pub fn default() -> Self {
@@ -463,7 +459,7 @@ where
     }
 
     /// returns a reference to the internal voronoi diagram
-    pub fn diagram(&self) -> &VD::VoronoiDiagram<I1, F1, I2, F2> {
+    pub fn diagram(&self) -> &VD::VoronoiDiagram<I1, F1> {
         &self.diagram
     }
 
@@ -1034,7 +1030,7 @@ where
 
     fn convert_edge_to_shape(
         &self,
-        edge: &VD::VoronoiEdge<I1, F1, I2, F2>,
+        edge: &VD::VoronoiEdge<I1, F1>,
     ) -> cgmath_3d::Shape3d<F1> {
         //println!("Converting {:?} to line", edge.get_id());
         let edge_id = Some(edge.get_id());
