@@ -361,7 +361,7 @@ fn bench_1(c: &mut Criterion) {
     ];
     let segments: Vec<Line<i32>> = segments.iter().map(|x| x.into()).collect();
 
-    let mut centerline = Centerline::<i32, f32, i64, f64>::with_segments(segments);
+    let mut centerline = Centerline::<i32, f32>::with_segments(segments);
     c.bench_function("bench1", |b| {
         b.iter(|| {
             centerline.build_voronoi().expect("bench_1");

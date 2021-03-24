@@ -400,7 +400,7 @@ where
     /// builds the voronoi diagram and filter out infinite edges and other 'outside' geometry
     pub fn build_voronoi(&mut self) -> Result<(), CenterlineError> {
         let mut vb = VB::Builder::new();
-        //#[cfg(feature = "console_debug")]
+        #[cfg(feature = "console_debug")]
         {
             print!("build_voronoi()-> input segments:[");
             for s in self.segments.iter() {
