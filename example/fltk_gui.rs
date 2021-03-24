@@ -545,7 +545,7 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     let mut data_bm = data.borrow_mut();
 
     let obj_set = {
-        let input = BufReader::new(File::open("example/logo.obj").unwrap());
+        let input = BufReader::new(File::open("example/rust.obj").unwrap());
         obj::raw::parse_obj(input)?
     };
 
