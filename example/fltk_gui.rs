@@ -46,8 +46,8 @@ licenses /why-not-lgpl.html>.
 
 use centerline::Centerline;
 use centerline::CenterlineError;
-use cgmath::SquareMatrix;
 use cgmath::Transform;
+use cgmath::{Point2, SquareMatrix};
 
 use fltk::app::redraw;
 use fltk::valuator::HorNiceSlider;
@@ -55,12 +55,14 @@ use fltk::*;
 use fltk::{app, draw::*, frame::*};
 
 use cgmath;
-use linestring::cgmath_2d::LineStringSet2;
+use linestring::cgmath_2d::{Aabb2, LineStringSet2, SimpleAffine};
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::LineString3;
 use obj;
 use ordered_float::OrderedFloat;
 //use rayon::prelude::*;
+#[allow(unused_imports)]
+use itertools::Itertools;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::BufReader;
@@ -75,23 +77,25 @@ const WF: i32 = 790;
 const H: i32 = 650;
 const W: i32 = 800;
 
+type T = f32;
+
 #[derive(Debug, Clone, Copy)]
 pub enum GuiMessage {
     SliderPreChanged(f64),
     SliderPostChanged(f64),
-    SliderDotChanged(f32),
+    SliderDotChanged(T),
 }
 
 /// Data containing an individual shape, this will be processed by a single thread.
 struct Shape {
     // the input data after it has been transformed to our coordinate system
     // but not simplified.
-    raw_data: LineStringSet2<f32>,
+    raw_data: LineStringSet2<T>,
 
     // centerline.segments is the simplified version of 'raw_data', also input to boost voronoi
-    centerline: Option<Centerline<i32, f32>>,
+    centerline: Option<Centerline<i32, T>>,
 
-    simplified_centerline: Option<Vec<LineString3<f32>>>,
+    simplified_centerline: Option<Vec<LineString3<T>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,10 +103,10 @@ struct Configuration {
     window_center: (i32, i32),
     input_distance: f64,
     input_distance_dirty: bool,
-    centerline_distance: f32,
-    centerline_scaled_distance: f32,
+    centerline_distance: T,
+    centerline_scaled_distance: T,
     centerline_distance_dirty: bool,
-    normalized_dot: f32,
+    normalized_dot: T,
     normalized_dot_dirty: bool,
     last_message: Option<GuiMessage>,
 }
@@ -110,6 +114,7 @@ struct Configuration {
 struct SharedData {
     shapes: Option<Vec<Shape>>,
     configuration: Configuration,
+    affine: SimpleAffine<T>,
 }
 
 fn main() -> Result<(), CenterlineError> {
@@ -148,6 +153,7 @@ fn main() -> Result<(), CenterlineError> {
     wind.set_color(Color::White);
     wind.end();
     wind.show();
+
     let shared_data_rc = Rc::new(RefCell::new(SharedData {
         shapes: None,
         configuration: Configuration {
@@ -161,6 +167,7 @@ fn main() -> Result<(), CenterlineError> {
             input_distance_dirty: true,
             last_message: None,
         },
+        affine: SimpleAffine::default(),
     }));
 
     let (sender, receiver) = app::channel::<GuiMessage>();
@@ -177,7 +184,7 @@ fn main() -> Result<(), CenterlineError> {
     });
 
     slider_dot.set_callback2(move |s| {
-        let value = s.value() as f32;
+        let value = s.value() as T;
         s.set_label(
             ("               Normalized dot limit:".to_string()
                 + &value.to_string()
@@ -203,6 +210,22 @@ fn main() -> Result<(), CenterlineError> {
     let shared_data_c = Rc::clone(&shared_data_rc);
     // This is called whenever the window is drawn and redrawn (in the event loop)
     wind.draw(move || {
+        let draw_fn = |line: Result<[T; 4], _>, cross: bool| {
+            if let Ok(line) = line {
+                let (x1, y1, x2, y2) = (
+                    line[0] as i32,
+                    line[1] as i32,
+                    line[2] as i32,
+                    line[3] as i32,
+                );
+                draw::draw_line(x1, y1, x2, y2);
+                if cross {
+                    draw::draw_line(x1 - 2, y1 - 2, x1 + 2, y1 + 2);
+                    draw::draw_line(x1 + 2, y1 - 2, x1 - 2, y1 + 2);
+                }
+            }
+        };
+
         let mut data_bm: RefMut<_> = shared_data_c.borrow_mut();
 
         set_draw_color(Color::White);
@@ -211,69 +234,61 @@ fn main() -> Result<(), CenterlineError> {
 
         let opt_shapes = data_bm.shapes.take();
         if let Some(vec_shapes) = opt_shapes {
+            let cross = match data_bm.configuration.last_message {
+                Some(GuiMessage::SliderPreChanged(_)) => true,
+                _ => false,
+            };
             for shape in vec_shapes.iter() {
                 if let Some(ref centerline) = shape.centerline {
                     draw::set_line_style(LineStyle::Solid, 2);
                     draw::set_draw_color(Color::Red);
                     for a_line in centerline.segments.iter() {
-                        // The scaling transform is already multiplied by 256
-                        let x1 =
-                            (a_line.start.x >> 8) as i32 + data_bm.configuration.window_center.0;
-                        let y1 =
-                            (a_line.start.y >> 8) as i32 + data_bm.configuration.window_center.1;
-                        let x2 =
-                            (a_line.end.x >> 8) as i32 + data_bm.configuration.window_center.0;
-                        let y2 =
-                            (a_line.end.y >> 8) as i32 + data_bm.configuration.window_center.1;
-                        draw::draw_line(x1, y1, x2, y2);
-                        match data_bm.configuration.last_message {
-                            Some(GuiMessage::SliderPreChanged(_)) => {
-                                draw::draw_line(x1 - 2, y1 - 2, x1 + 2, y1 + 2);
-                                draw::draw_line(x1 + 2, y1 - 2, x1 - 2, y1 + 2);
-                            }
-                            _ => (),
-                        }
+                        draw_fn(
+                            data_bm.affine.transform_ab_a([
+                                a_line.start.x as T,
+                                a_line.start.y as T,
+                                a_line.end.x as T,
+                                a_line.end.y as T,
+                            ]),
+                            cross,
+                        );
                     }
                     draw::set_line_style(LineStyle::Solid, 1);
                     draw::set_draw_color(Color::Black);
                     for a_line in centerline.lines.iter().flatten() {
-                        // The scaling transform is already multiplied by 256
-                        let x1 =
-                            ((a_line.start.x as i32) >> 8) + data_bm.configuration.window_center.0;
-                        let y1 =
-                            ((a_line.start.y as i32) >> 8) + data_bm.configuration.window_center.1;
-                        let x2 =
-                            ((a_line.end.x as i32) >> 8) + data_bm.configuration.window_center.0;
-                        let y2 =
-                            ((a_line.end.y as i32) >> 8) + data_bm.configuration.window_center.1;
-                        draw::draw_line(x1, y1, x2, y2);
+                        draw_fn(
+                            data_bm.affine.transform_ab_a([
+                                a_line.start.x as T,
+                                a_line.start.y as T,
+                                a_line.end.x as T,
+                                a_line.end.y as T,
+                            ]),
+                            false,
+                        )
                     }
                     draw::set_draw_color(Color::Blue);
+                    let cross = match data_bm.configuration.last_message {
+                        Some(GuiMessage::SliderPostChanged(_)) => true,
+                        _=> false
+                    };
                     for a_linestring in shape.simplified_centerline.iter().flatten() {
                         //println!("an_arc start_point:{:?} end_point:{:?} cell_point:{:?} segment:{:?}", an_arc.start_point, an_arc.end_point, an_arc.cell_point, an_arc.segment);
                         //let lines = an_arc.discretise_2d(1000.0);
                         //println!("an_arc.len()={:?}", lines.points().len() );
                         for a_line in a_linestring.as_lines().iter() {
-                            // The scaling transform is already multiplied by 256
-                            let x1 = ((a_line.start.x as i32) >> 8)
-                                + data_bm.configuration.window_center.0;
-                            let y1 = ((a_line.start.y as i32) >> 8)
-                                + data_bm.configuration.window_center.1;
-                            let x2 = ((a_line.end.x as i32) >> 8)
-                                + data_bm.configuration.window_center.0;
-                            let y2 = ((a_line.end.y as i32) >> 8)
-                                + data_bm.configuration.window_center.1;
-                            draw::draw_line(x1, y1, x2, y2);
-                            match data_bm.configuration.last_message {
-                                Some(GuiMessage::SliderPostChanged(_)) => {
-                                    draw::draw_line(x1 - 2, y1 - 2, x1 + 2, y1 + 2);
-                                    draw::draw_line(x1 + 2, y1 - 2, x1 - 2, y1 + 2);
-                                }
-                                _ => (),
-                            }
+
+                            draw_fn(
+                                data_bm.affine.transform_ab_a([
+                                    a_line.start.x as T,
+                                    a_line.start.y as T,
+                                    a_line.end.x as T,
+                                    a_line.end.y as T,
+                                ]),
+                                cross,
+                            );
                         }
                     }
-                    #[cfg(feature = "console_debug")]
+                    /*#[cfg(feature = "console_debug")]
                     if let Some(ref centerline) = shape.centerline {
                         draw::set_draw_color(Color::Black);
                         if let Some(ref debug_edges) = centerline.debug_edges {
@@ -299,18 +314,66 @@ fn main() -> Result<(), CenterlineError> {
                                 //println!("drawing edge {}:({},{}),({},{})", e, x1, y1, x2, y2);
                             }
                         }
-                    }
+                    }*/
                 }
             }
             data_bm.shapes = Some(vec_shapes);
         }
     });
 
-    //let shared_data_c = Rc::clone(&shared_data_rc);
+    let shared_data_c = Rc::clone(&shared_data_rc);
+    let mut mouse_drag: Option<(i32, i32)> = None;
     wind.handle(move |ev| match ev {
-        enums::Event::Released => {
+        fltk::enums::Event::MouseWheel => {
             let event = &app::event_coords();
-            println!("mouse at {:?}", event);
+            let mut shared_data_bm = shared_data_c.borrow_mut();
+            let event_dy = app::event_dy();
+            let reverse_middle = shared_data_bm
+                .affine
+                .transform_ba(&cgmath::Point2::from([event.0 as T, event.1 as T]));
+            if reverse_middle.is_err() {
+                println!("{:?}", reverse_middle.err().unwrap());
+                return false;
+            }
+            let reverse_middle = reverse_middle.unwrap();
+            if event_dy != 0 {
+                shared_data_bm.affine.scale *= 1.01_f32.powf(event_dy as T);
+            }
+            let new_middle = shared_data_bm.affine.transform_ab(&cgmath::Point2::from([
+                reverse_middle[0] as T,
+                reverse_middle[1] as T,
+            ]));
+            if new_middle.is_err() {
+                println!("{:?}", new_middle.err().unwrap());
+                return false;
+            }
+            let new_middle = new_middle.unwrap();
+            // When zooming we want the center of screen remain at the same relative position.
+            shared_data_bm.affine.b_offset[0] += (event.0 as T) - new_middle[0];
+            shared_data_bm.affine.b_offset[1] += (event.1 as T) - new_middle[1];
+
+            //println!("mouse wheel at dy:{:?} scale:{:?}", event_dy, shared_data_bm.visualizer.affine.scale);
+            redraw();
+            true
+        }
+        fltk::enums::Event::Drag => {
+            let event = &app::event_coords();
+            if mouse_drag.is_none() {
+                mouse_drag = Some(*event);
+            } else {
+                let md = mouse_drag.unwrap();
+                let mut shared_data_bm = shared_data_c.borrow_mut();
+                shared_data_bm.affine.b_offset[0] += (event.0 - md.0) as T;
+                shared_data_bm.affine.b_offset[1] += (event.1 - md.1) as T;
+                mouse_drag = Some(*event);
+                redraw();
+            }
+            true
+        }
+        fltk::enums::Event::Released => {
+            if mouse_drag.is_some() {
+                mouse_drag = None;
+            }
             true
         }
         _ => false,
@@ -330,7 +393,7 @@ fn main() -> Result<(), CenterlineError> {
                     shared_data_bm.configuration.normalized_dot_dirty = true;
                 }
                 GuiMessage::SliderPostChanged(value) => {
-                    shared_data_bm.configuration.centerline_distance = value as f32;
+                    shared_data_bm.configuration.centerline_distance = value as T;
                     shared_data_bm.configuration.centerline_distance_dirty = true;
                 }
             }
@@ -385,7 +448,7 @@ fn threaded_re_calculate(
     configuration: Configuration,
 ) -> Result<Shape, CenterlineError> {
     if shape.centerline.is_none() {
-        shape.centerline = Some(Centerline::<i32, f32>::default());
+        shape.centerline = Some(Centerline::<i32, T>::default());
     }
     let input_changed = if configuration.input_distance_dirty {
         recalculate_voronoi_input(&mut shape, configuration)?;
@@ -454,7 +517,7 @@ fn recalculate_centerline(
     Ok(())
 }
 
-/// Re-calculate centerline
+/// simplify centerline
 fn simplify_centerline(
     shape: &mut Shape,
     configuration: Configuration,
@@ -465,7 +528,7 @@ fn simplify_centerline(
         if let Some(simplified_centerline) = shape.simplified_centerline.take() {
             simplified_centerline
         } else {
-            Vec::<LineString3<f32>>::new()
+            Vec::<LineString3<T>>::new()
         };
     simplified_centerline.clear();
     if let Some(ref centerline) = shape.centerline {
@@ -495,8 +558,7 @@ fn recalculate_voronoi_input(
             if configuration.input_distance > 0.0 {
                 #[cfg(feature = "console_debug")]
                 let before = lines.len();
-                let s_lines =
-                    lines.simplify((configuration.input_distance as f32) * 256_f32.sqrt());
+                let s_lines = lines.simplify((configuration.input_distance as T) * 256_f32.sqrt());
                 #[cfg(feature = "console_debug")]
                 println!(
                     "reduced by {} points of {} = {}",
@@ -557,12 +619,18 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     #[cfg(feature = "console_debug")]
     println!("total aabb b4:{:?}", total_aabb);
 
-    let (_plane, transform) = get_transform(&total_aabb)?;
+    let (_plane, transform, voronoi_input_aabb) = get_transform(&total_aabb)?;
     // transform each linestring to 2d
-    let mut raw_data: Vec<LineStringSet2<f32>> = lines
+    let mut raw_data: Vec<LineStringSet2<T>> = lines
         .iter()
         .map(|x| x.transform(&transform).copy_to_2d(cgmath_3d::Plane::XY))
         .collect();
+    {
+        let mut screen_aabb = Aabb2::new(&Point2::new(W as T, H as T));
+        screen_aabb.update_point(&Point2::new(0.0, 0.0));
+        data_bm.affine = SimpleAffine::new(&voronoi_input_aabb, &screen_aabb)?;
+    }
+
     #[cfg(feature = "console_debug")]
     println!("Started with {} shapes", raw_data.len());
 
@@ -621,8 +689,8 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
 /// so that it will fill the screen. For good measure the scale is then multiplied by 256 so the
 /// points makes half decent input data to boost voronoi (integer input only)
 fn get_transform(
-    total_aabb: &cgmath_3d::Aabb3<f32>,
-) -> Result<(cgmath_3d::Plane, cgmath::Matrix4<f32>), CenterlineError> {
+    total_aabb: &cgmath_3d::Aabb3<T>,
+) -> Result<(cgmath_3d::Plane, cgmath::Matrix4<T>, Aabb2<T>), CenterlineError> {
     let plane = if let Some(plane) = cgmath_3d::Plane::get_plane(total_aabb) {
         plane
     } else {
@@ -638,10 +706,13 @@ fn get_transform(
         (high.y + low.y) / 2.0,
         (high.z + low.z) / 2.0,
     );
-    println!("Obj file AABB: Center {:?} low:{:?}, high:{:?}", center, low, high);
+    println!(
+        "Obj file AABB: Center {:?} low:{:?}, high:{:?}",
+        center, low, high
+    );
 
     let scale_transform = {
-        let scale = 256.0 * (HF.min(WF) as f32 - 10.0)
+        let scale = 256.0 * (HF.min(WF) as T - 10.0)
             / std::cmp::max(
                 std::cmp::max(OrderedFloat(high.x - low.x), OrderedFloat(high.y - low.y)),
                 OrderedFloat(high.z - low.z),
@@ -672,6 +743,7 @@ fn get_transform(
 
     let low0 = total_aabb.get_low().unwrap();
     let high0 = total_aabb.get_high().unwrap();
+    #[cfg(feature = "console_debug")]
     let center0 = cgmath::point3(
         (high0.x + low0.x) / 2.0,
         (high0.y + low0.y) / 2.0,
@@ -680,8 +752,17 @@ fn get_transform(
 
     let low0 = total_transform.transform_point(low0);
     let high0 = total_transform.transform_point(high0);
+    #[cfg(feature = "console_debug")]
     let center0 = total_transform.transform_point(center0);
-    println!("Voronoi input AABB: Center {:?} low:{:?}, high:{:?}", center0, low0, high0);
+    let mut voronoi_input_aabb = Aabb2::new(&Point2::new(low0.x, low.y));
+    voronoi_input_aabb.update_point(&Point2::new(high0.x, high0.y));
+
+    #[cfg(feature = "console_debug")]
+    println!(
+        "Voronoi input AABB: Center {:?} low:{:?}, high:{:?}",
+        center0, low0, high0
+    );
+    println!("Voronoi input AABB: {:?}", voronoi_input_aabb);
 
     let inverse_total = total_transform.invert();
     if inverse_total.is_none() {
@@ -694,5 +775,5 @@ fn get_transform(
     //let center0 = inverse_total.transform_point(center0);
     //println!("I Center {:?} low:{:?}, high:{:?}", center0, low0, high0);
 
-    Ok((plane, total_transform))
+    Ok((plane, total_transform, voronoi_input_aabb))
 }

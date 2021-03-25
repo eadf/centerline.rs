@@ -54,6 +54,9 @@ pub enum CenterlineError {
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
+
+    #[error(transparent)]
+    LinestringError(#[from] linestring::LinestringError),
 }
 
 bitflags! {
