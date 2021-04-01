@@ -4,26 +4,20 @@
 #![deny(unused_qualifications)]
 #![deny(unused_results)]
 #![deny(unused_imports)]
-#![allow(unused_imports)]
+#![deny(unused_imports)]
 #![feature(hash_drain_filter)]
-#![feature(test)]
+//#![feature(test)]
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;
-use boostvoronoi::{InputType, OutputType, TypeConverter};
+use boostvoronoi::{InputType, OutputType};
 
 use cgmath::InnerSpace;
 use linestring::cgmath_2d;
-use linestring::cgmath_2d::{Line2, VoronoiParabolicArc};
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
-use std::borrow::Borrow;
-use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::fmt::Display;
 use std::ops::Neg;
-use std::rc::Rc;
-use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 #[macro_use]
@@ -679,7 +673,7 @@ where
         if self.diagram.edge_get_vertex0(edge_id).is_some() && v1.is_none() {
             // this edge leads to nowhere, break recursion
             self.reject_edge(edge_id, color, ignored_edges);
-            return
+            return;
         }
         self.reject_edge(edge_id, color, ignored_edges);
         self.reject_edge(self.diagram.edge_get_twin(edge_id), color, ignored_edges);
@@ -1031,10 +1025,7 @@ where
         //println!("Converted {:?} to lines", edges);
     }
 
-    fn convert_edge_to_shape(
-        &self,
-        edge: &VD::VoronoiEdge<I1, F1>,
-    ) -> cgmath_3d::Shape3d<F1> {
+    fn convert_edge_to_shape(&self, edge: &VD::VoronoiEdge<I1, F1>) -> cgmath_3d::Shape3d<F1> {
         //println!("Converting {:?} to line", edge.get_id());
         let edge_id = Some(edge.get_id());
         let edge_twin_id = self.diagram.edge_get_twin(edge_id);
@@ -1105,8 +1096,8 @@ where
             );
         }
         if edge.is_curved() {
-            let arc = VoronoiParabolicArc::new(
-                Line2 {
+            let arc = cgmath_2d::VoronoiParabolicArc::new(
+                cgmath_2d::Line2 {
                     start: segment_start_point,
                     end: segment_end_point,
                 },

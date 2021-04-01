@@ -55,7 +55,7 @@ use fltk::*;
 use fltk::{app, draw::*, frame::*};
 
 use cgmath;
-use linestring::cgmath_2d::{Aabb2, LineStringSet2, SimpleAffine};
+use linestring::cgmath_2d::{convex_hull, Aabb2, LineStringSet2, SimpleAffine};
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::LineString3;
 use obj;
@@ -240,6 +240,7 @@ fn main() -> Result<(), CenterlineError> {
             };
             for shape in vec_shapes.iter() {
                 if let Some(ref centerline) = shape.centerline {
+                    // Draw the segments of this shape
                     draw::set_line_style(LineStyle::Solid, 2);
                     draw::set_draw_color(Color::Red);
                     for a_line in centerline.segments.iter() {
@@ -253,6 +254,41 @@ fn main() -> Result<(), CenterlineError> {
                             cross,
                         );
                     }
+
+                    // draw the convex hull of each - root level - raw input shape
+                    draw::set_line_style(LineStyle::Solid, 1);
+                    draw::set_draw_color(Color::Dark2);
+                    if let Some(ref hull) = shape.raw_data.get_convex_hull() {
+                        for a_line in hull.as_lines().iter() {
+                            draw_fn(
+                                data_bm.affine.transform_ab_a([
+                                    a_line.start.x as T,
+                                    a_line.start.y as T,
+                                    a_line.end.x as T,
+                                    a_line.end.y as T,
+                                ]),
+                                false,
+                            );
+                        }
+                    }
+                    // draw the convex hull of each - root level - raw input shape
+                    if let Some(shape_internals) = shape.raw_data.get_internals() {
+                        draw::set_draw_color(Color::Green);
+                        for hull in shape_internals.iter() {
+                            for a_line in hull.1.as_lines().iter() {
+                                draw_fn(
+                                    data_bm.affine.transform_ab_a([
+                                        a_line.start.x as T,
+                                        a_line.start.y as T,
+                                        a_line.end.x as T,
+                                        a_line.end.y as T,
+                                    ]),
+                                    false,
+                                );
+                            }
+                        }
+                    }
+
                     draw::set_line_style(LineStyle::Solid, 1);
                     draw::set_draw_color(Color::Black);
                     for a_line in centerline.lines.iter().flatten() {
@@ -269,14 +305,13 @@ fn main() -> Result<(), CenterlineError> {
                     draw::set_draw_color(Color::Blue);
                     let cross = match data_bm.configuration.last_message {
                         Some(GuiMessage::SliderPostChanged(_)) => true,
-                        _=> false
+                        _ => false,
                     };
                     for a_linestring in shape.simplified_centerline.iter().flatten() {
                         //println!("an_arc start_point:{:?} end_point:{:?} cell_point:{:?} segment:{:?}", an_arc.start_point, an_arc.end_point, an_arc.cell_point, an_arc.segment);
                         //let lines = an_arc.discretise_2d(1000.0);
                         //println!("an_arc.len()={:?}", lines.points().len() );
                         for a_line in a_linestring.as_lines().iter() {
-
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
                                     a_line.start.x as T,
@@ -288,33 +323,6 @@ fn main() -> Result<(), CenterlineError> {
                             );
                         }
                     }
-                    /*#[cfg(feature = "console_debug")]
-                    if let Some(ref centerline) = shape.centerline {
-                        draw::set_draw_color(Color::Black);
-                        if let Some(ref debug_edges) = centerline.debug_edges {
-                            for e in debug_edges
-                                .iter()
-                                .map(|x| x.0)
-                                .sorted_unstable()
-                                .map(|x| debug_edges.get_key_value(x))
-                            {
-                                let (e, l) = e.unwrap();
-                                let x1 =
-                                    ((l[0] as i32) >> 8) + data_bm.configuration.window_center.0;
-                                let y1 =
-                                    ((l[1] as i32) >> 8) + data_bm.configuration.window_center.1;
-                                let x2 =
-                                    ((l[2] as i32) >> 8) + data_bm.configuration.window_center.0;
-                                let y2 =
-                                    ((l[3] as i32) >> 8) + data_bm.configuration.window_center.1;
-                                draw::draw_line(x1, y1, x2, y2);
-                                //let mid_x = (x1 + x2) / 2;
-                                //let mid_y = (y1 + y2) / 2;
-                                //draw_text(e.to_string().as_str(), x1, y1);
-                                //println!("drawing edge {}:({},{}),({},{})", e, x1, y1, x2, y2);
-                            }
-                        }
-                    }*/
                 }
             }
             data_bm.shapes = Some(vec_shapes);
@@ -337,7 +345,9 @@ fn main() -> Result<(), CenterlineError> {
             }
             let reverse_middle = reverse_middle.unwrap();
             if event_dy != 0 {
-                shared_data_bm.affine.scale *= 1.01_f32.powf(event_dy as T);
+                let scale_mod = 1.01_f32.powf(event_dy as T);
+                shared_data_bm.affine.scale[0] *= scale_mod;
+                shared_data_bm.affine.scale[1] *= scale_mod;
             }
             let new_middle = shared_data_bm.affine.transform_ab(&cgmath::Point2::from([
                 reverse_middle[0] as T,
@@ -625,6 +635,12 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
         .iter()
         .map(|x| x.transform(&transform).copy_to_2d(cgmath_3d::Plane::XY))
         .collect();
+
+    // calculate the hull of each shape
+    for i in 0..raw_data.len() {
+        raw_data[i].calculate_convex_hull();
+    }
+
     {
         let mut screen_aabb = Aabb2::new(&Point2::new(W as T, H as T));
         screen_aabb.update_point(&Point2::new(0.0, 0.0));
@@ -637,31 +653,28 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     // try to consolidate shapes. If one AABB (a) totally engulfs another shape (b)
     // we put shape (b) inside (a)
     'outer_loop: loop {
-        // redo *every* test if something is changed until nothing else can be done
+        // redo *every* test until nothing else can be done
         for i in 0..raw_data.len() {
             for j in i + 1..raw_data.len() {
-                if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb()) {
-                    // move stuff from j to i via a temp
-                    let mut line_j_steal = LineStringSet2::default();
-                    {
-                        let line_j = raw_data.get_mut(j).unwrap();
-                        line_j_steal.take_from(line_j);
-                    }
+                if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb())
+                    && convex_hull::ConvexHull::contains(
+                        &raw_data[i].get_convex_hull().as_ref().unwrap(),
+                        &raw_data[j].get_convex_hull().as_ref().unwrap(),
+                    )
+                {
+                    // move stuff from j to i via a temp because of borrow checker
+                    let mut stolen_line_j =
+                        LineStringSet2::steal_from(raw_data.get_mut(j).unwrap());
                     let line_i = raw_data.get_mut(i).unwrap();
-
-                    line_i.take_from(&mut line_j_steal);
+                    line_i.take_from_internal(&mut stolen_line_j)?;
                     let _ = raw_data.remove(j);
                     continue 'outer_loop;
                 } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb()) {
-                    // move stuff from i to j via a temp
-                    let mut line_i_steal = LineStringSet2::default();
-                    {
-                        let line_i = raw_data.get_mut(i).unwrap();
-                        line_i_steal.take_from(line_i);
-                    }
+                    // move stuff from i to j via a temp because of borrow checker
+                    let mut stolen_line_i =
+                        LineStringSet2::steal_from(raw_data.get_mut(i).unwrap());
                     let line_j = raw_data.get_mut(j).unwrap();
-
-                    line_j.take_from(&mut line_i_steal);
+                    line_j.take_from_internal(&mut stolen_line_i)?;
                     let _ = raw_data.remove(i);
                     continue 'outer_loop;
                 }
