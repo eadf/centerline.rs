@@ -49,7 +49,7 @@ Requires ```#![feature(hash_drain_filter)]``` i.e. ```+nightly```
 ## Todo
 
 - [ ] Group related shapes together based on convex hull and not just AABB
-- [ ] Rayon over each shape group (problem: boostvoronoi diagrams uses std::cell::Cell)
+- [x] Rayon over each shape group
 - [ ] Open file dialogue for fltk_gui
 - [ ] Maybe, maybe make it possible to save result from fltk_gui :)
 - [ ] Make an option to remove inner center-lines of inner shapes. I.e. the holes in letters.

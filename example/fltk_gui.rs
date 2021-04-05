@@ -46,27 +46,34 @@ licenses /why-not-lgpl.html>.
 
 use centerline::Centerline;
 use centerline::CenterlineError;
-use cgmath::Transform;
+use cgmath::{Matrix4, One, Transform};
 use cgmath::{Point2, SquareMatrix};
 
 use fltk::app::redraw;
+use fltk::group::Pack;
 use fltk::valuator::HorNiceSlider;
 use fltk::*;
 use fltk::{app, draw::*, frame::*};
 
 use cgmath;
-use linestring::cgmath_2d::{convex_hull, Aabb2, LineStringSet2, SimpleAffine};
+use fltk::button::RoundButton;
+use fltk::dialog::FileDialogType;
+use fltk::menu::MenuButton;
+#[allow(unused_imports)]
+use itertools::Itertools;
+use linestring::cgmath_2d::{convex_hull, Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::LineString3;
 use obj;
 use ordered_float::OrderedFloat;
-//use rayon::prelude::*;
-#[allow(unused_imports)]
-use itertools::Itertools;
+use rayon::prelude::*;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
+
+#[macro_use]
+extern crate bitflags;
 
 // frame size
 const HF: i32 = 590;
@@ -81,9 +88,24 @@ type T = f32;
 
 #[derive(Debug, Clone, Copy)]
 pub enum GuiMessage {
-    SliderPreChanged(f64),
-    SliderPostChanged(f64),
+    SliderPreChanged(f32),
+    SliderPostChanged(f32),
     SliderDotChanged(T),
+    Filter(DrawFilterFlag),
+    MenuChoiceLoad,
+    MenuChoiceSaveOutline,
+    MenuChoiceSaveCenterLine,
+}
+
+bitflags! {
+    pub struct DrawFilterFlag: u32 {
+        /// Edges considered to be outside all closed input geometry
+        const THREAD_GROUP_HULL = 0b000000000000001;
+        const THREAD_GROUP_AABB = 0b000000000000010;
+        const INTERNAL_GEOMETRY = 0b000000000000100;
+        const INTERNAL_EDGES    = 0b000000000001000;
+        const DRAW_ALL =          0b111111111111111;
+    }
 }
 
 /// Data containing an individual shape, this will be processed by a single thread.
@@ -101,7 +123,7 @@ struct Shape {
 #[derive(Debug, Clone, Copy)]
 struct Configuration {
     window_center: (i32, i32),
-    input_distance: f64,
+    input_distance: T,
     input_distance_dirty: bool,
     centerline_distance: T,
     centerline_scaled_distance: T,
@@ -109,6 +131,8 @@ struct Configuration {
     normalized_dot: T,
     normalized_dot_dirty: bool,
     last_message: Option<GuiMessage>,
+    draw_flag: DrawFilterFlag,
+    inverse_transform: Matrix4<T>,
 }
 
 struct SharedData {
@@ -128,28 +152,61 @@ fn main() -> Result<(), CenterlineError> {
     frame.set_color(Color::Black);
     frame.set_frame(FrameType::DownBox);
 
-    let mut slider_pre =
-        HorNiceSlider::new(5, 5 + HF, WF, 25, "Input data simplification distance");
+    let mut pack = Pack::new(5, 5 + HF, (W - 10) / 2, H - 10, "");
+    pack.set_spacing(27);
+
+    let mut slider_pre = HorNiceSlider::default()
+        .with_size(100, 25)
+        .with_label("Input data simplification distance");
     slider_pre.set_value(1.0);
     slider_pre.set_frame(FrameType::PlasticUpBox);
     slider_pre.set_color(Color::White);
 
-    let mut slider_dot = HorNiceSlider::new(5, 5 + HF + 50, WF, 25, "normalized dot product limit");
+    let mut slider_dot = HorNiceSlider::default()
+        .with_size(100, 25)
+        .with_label("normalized dot product limit");
     slider_dot.set_value(0.38);
     slider_dot.set_frame(FrameType::PlasticUpBox);
     slider_dot.set_color(Color::White);
 
-    let mut slider_post = HorNiceSlider::new(
-        5,
-        5 + HF + 100,
-        WF,
-        25,
-        "Centerline data simplification distance",
-    );
+    let mut slider_post = HorNiceSlider::default()
+        .with_size(100, 25)
+        .with_label("Centerline data simplification distance");
     slider_post.set_value(1.0);
     slider_post.set_frame(FrameType::PlasticUpBox);
     slider_post.set_color(Color::White);
 
+    pack.end();
+    let mut pack = Pack::new(2 * 5 + (W - 10) / 2, 5 + HF, (W - 10) / 2 - 5, H - 10, "");
+    pack.set_spacing(1);
+    let mut menu_but = MenuButton::default().with_size(170, 25).with_label("Menu");
+    menu_but.set_frame(FrameType::PlasticUpBox);
+
+    let mut thread_group_aabb_button = RoundButton::default()
+        .with_size(180, 25)
+        .with_label("Thread group AABB");
+    thread_group_aabb_button.toggle(false);
+    thread_group_aabb_button.set_frame(FrameType::PlasticUpBox);
+
+    let mut thread_group_hull_button = RoundButton::default()
+        .with_size(180, 25)
+        .with_label("Thread group convex hull");
+    thread_group_hull_button.toggle(false);
+    thread_group_hull_button.set_frame(FrameType::PlasticUpBox);
+
+    let mut internal_geometry_button = RoundButton::default()
+        .with_size(180, 25)
+        .with_label("Internal geometry convex hull");
+    internal_geometry_button.toggle(true);
+    internal_geometry_button.set_frame(FrameType::PlasticUpBox);
+
+    //let mut internal_edges_button = RoundButton::default()
+    //    .with_size(180, 25)
+    //    .with_label("Internal edges");
+    //internal_edges_button.toggle(true);
+    //internal_edges_button.set_frame(FrameType::PlasticUpBox);
+
+    pack.end();
     wind.set_color(Color::White);
     wind.end();
     wind.show();
@@ -166,6 +223,10 @@ fn main() -> Result<(), CenterlineError> {
             input_distance: 0.0,
             input_distance_dirty: true,
             last_message: None,
+            draw_flag: DrawFilterFlag::DRAW_ALL
+                ^ DrawFilterFlag::THREAD_GROUP_AABB
+                ^ DrawFilterFlag::THREAD_GROUP_HULL,
+            inverse_transform: Matrix4::<T>::one(),
         },
         affine: SimpleAffine::default(),
     }));
@@ -173,40 +234,67 @@ fn main() -> Result<(), CenterlineError> {
     let (sender, receiver) = app::channel::<GuiMessage>();
     sender.send(GuiMessage::SliderPreChanged(50.0));
     slider_pre.set_callback2(move |s| {
-        let value = s.value() as f64 * 100.0;
-        s.set_label(
-            ("               Input data simplification distance:".to_string()
-                + &value.to_string()
-                + (&"               ".to_string()))
-                .as_str(),
-        );
+        let value = s.value() as f32 * 100.0;
+        s.set_label(&format!(
+            "   Input data simplification distance: {:.4}       ",
+            value
+        ));
         sender.send(GuiMessage::SliderPreChanged(value));
     });
 
     slider_dot.set_callback2(move |s| {
         let value = s.value() as T;
-        s.set_label(
-            ("               Normalized dot limit:".to_string()
-                + &value.to_string()
-                + (&"               ".to_string()))
-                .as_str(),
-        );
+        s.set_label(&format!("   Normalized dot limit: {:.4}       ", value));
         sender.send(GuiMessage::SliderDotChanged(value));
     });
 
     slider_post.set_callback2(move |s| {
-        let value = s.value() as f64 * 100.0;
-        s.set_label(
-            ("               Centerline simplification distance:".to_string()
-                + &value.to_string()
-                + (&"               ".to_string()))
-                .as_str(),
-        );
+        let value = s.value() as f32 * 100.0;
+        s.set_label(&format!(
+            "   Centerline simplification distance: {:.4}       ",
+            value
+        ));
         sender.send(GuiMessage::SliderPostChanged(value));
     });
 
-    add_data(Rc::clone(&shared_data_rc))?;
-
+    internal_geometry_button.emit(
+        sender,
+        GuiMessage::Filter(DrawFilterFlag::INTERNAL_GEOMETRY),
+    );
+    //internal_edges_button.emit(sender, GuiMessage::Filter(DrawFilterFlag::INTERNAL_EDGES));
+    thread_group_aabb_button.emit(
+        sender,
+        GuiMessage::Filter(DrawFilterFlag::THREAD_GROUP_AABB),
+    );
+    thread_group_hull_button.emit(
+        sender,
+        GuiMessage::Filter(DrawFilterFlag::THREAD_GROUP_HULL),
+    );
+    menu_but.add_emit(
+        "Load from file",
+        Shortcut::None,
+        menu::MenuFlag::Normal,
+        sender,
+        GuiMessage::MenuChoiceLoad,
+    );
+    menu_but.add_emit(
+        "Save outline to file",
+        Shortcut::None,
+        menu::MenuFlag::Normal,
+        sender,
+        GuiMessage::MenuChoiceSaveOutline,
+    );
+    menu_but.add_emit(
+        "Save centerline to file",
+        Shortcut::None,
+        menu::MenuFlag::Normal,
+        sender,
+        GuiMessage::MenuChoiceSaveCenterLine,
+    );
+    {
+        let data = Rc::clone(&shared_data_rc);
+        add_data_from_file(data, "example/logo.obj")?;
+    }
     let shared_data_c = Rc::clone(&shared_data_rc);
     // This is called whenever the window is drawn and redrawn (in the event loop)
     wind.draw(move || {
@@ -220,6 +308,7 @@ fn main() -> Result<(), CenterlineError> {
                 );
                 draw::draw_line(x1, y1, x2, y2);
                 if cross {
+                    // draws a little X at the end points.
                     draw::draw_line(x1 - 2, y1 - 2, x1 + 2, y1 + 2);
                     draw::draw_line(x1 + 2, y1 - 2, x1 - 2, y1 + 2);
                 }
@@ -254,12 +343,16 @@ fn main() -> Result<(), CenterlineError> {
                             cross,
                         );
                     }
-
-                    // draw the convex hull of each - root level - raw input shape
-                    draw::set_line_style(LineStyle::Solid, 1);
-                    draw::set_draw_color(Color::Dark2);
-                    if let Some(ref hull) = shape.raw_data.get_convex_hull() {
-                        for a_line in hull.as_lines().iter() {
+                    // draw the AABB of each (root level) - raw input shape
+                    if data_bm
+                        .configuration
+                        .draw_flag
+                        .contains(DrawFilterFlag::THREAD_GROUP_AABB)
+                    {
+                        draw::set_line_style(LineStyle::Solid, 1);
+                        draw::set_draw_color(Color::Dark1);
+                        let aabb: LineString2<T> = shape.raw_data.get_aabb().clone().into();
+                        for a_line in aabb.as_lines().iter() {
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
                                     a_line.start.x as T,
@@ -271,11 +364,16 @@ fn main() -> Result<(), CenterlineError> {
                             );
                         }
                     }
-                    // draw the convex hull of each - root level - raw input shape
-                    if let Some(shape_internals) = shape.raw_data.get_internals() {
-                        draw::set_draw_color(Color::Green);
-                        for hull in shape_internals.iter() {
-                            for a_line in hull.1.as_lines().iter() {
+                    // draw the convex hull of each (root level) - raw input shape
+                    if data_bm
+                        .configuration
+                        .draw_flag
+                        .contains(DrawFilterFlag::THREAD_GROUP_HULL)
+                    {
+                        draw::set_line_style(LineStyle::Solid, 1);
+                        draw::set_draw_color(Color::Dark2);
+                        if let Some(ref hull) = shape.raw_data.get_convex_hull() {
+                            for a_line in hull.as_lines().iter() {
                                 draw_fn(
                                     data_bm.affine.transform_ab_a([
                                         a_line.start.x as T,
@@ -285,6 +383,29 @@ fn main() -> Result<(), CenterlineError> {
                                     ]),
                                     false,
                                 );
+                            }
+                        }
+                    }
+                    if data_bm
+                        .configuration
+                        .draw_flag
+                        .contains(DrawFilterFlag::INTERNAL_GEOMETRY)
+                    {
+                        // draw the internal geometry 'holes'
+                        if let Some(shape_internals) = shape.raw_data.get_internals() {
+                            draw::set_draw_color(Color::Green);
+                            for hull in shape_internals.iter() {
+                                for a_line in hull.1.as_lines().iter() {
+                                    draw_fn(
+                                        data_bm.affine.transform_ab_a([
+                                            a_line.start.x as T,
+                                            a_line.start.y as T,
+                                            a_line.end.x as T,
+                                            a_line.end.y as T,
+                                        ]),
+                                        false,
+                                    );
+                                }
                             }
                         }
                     }
@@ -389,26 +510,135 @@ fn main() -> Result<(), CenterlineError> {
         _ => false,
     });
 
-    let shared_data_c = Rc::clone(&shared_data_rc);
+    let shared_data_c1 = Rc::clone(&shared_data_rc);
+    let shared_data_c2 = Rc::clone(&shared_data_rc);
     while app.wait() {
         if let Some(msg) = receiver.recv() {
-            let mut shared_data_bm: RefMut<_> = shared_data_c.borrow_mut();
             match msg {
                 GuiMessage::SliderPreChanged(value) => {
-                    shared_data_bm.configuration.input_distance = value;
+                    let mut shared_data_bm = shared_data_c1.borrow_mut();
+                    shared_data_bm.configuration.input_distance = value as T;
                     shared_data_bm.configuration.input_distance_dirty = true;
                 }
                 GuiMessage::SliderDotChanged(value) => {
+                    let mut shared_data_bm = shared_data_c1.borrow_mut();
                     shared_data_bm.configuration.normalized_dot = value;
                     shared_data_bm.configuration.normalized_dot_dirty = true;
                 }
                 GuiMessage::SliderPostChanged(value) => {
+                    let mut shared_data_bm = shared_data_c1.borrow_mut();
                     shared_data_bm.configuration.centerline_distance = value as T;
                     shared_data_bm.configuration.centerline_distance_dirty = true;
                 }
+                GuiMessage::Filter(flag) => {
+                    let mut shared_data_bm = shared_data_c1.borrow_mut();
+                    shared_data_bm.configuration.draw_flag ^= flag;
+                }
+                GuiMessage::MenuChoiceLoad => {
+                    println!("try to load");
+                    let mut chooser = dialog::NativeFileChooser::new(FileDialogType::BrowseDir);
+
+                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_title("select your input data");
+                    chooser.set_filter("*.obj");
+                    chooser.show();
+                    if let Some(filename) = chooser.filenames().first() {
+                        let shared_data_c = Rc::clone(&shared_data_rc);
+                        if let Err(err) =
+                            add_data_from_file(shared_data_c, filename.to_str().unwrap())
+                        {
+                            println!("Failed to read file: {:?}", err);
+                        }
+                    }
+                }
+                GuiMessage::MenuChoiceSaveOutline => {
+                    let mut chooser =
+                        dialog::NativeFileChooser::new(FileDialogType::BrowseSaveFile);
+
+                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_title("select file to save outline to");
+                    chooser.set_filter("*.obj");
+                    chooser.show();
+                    if let Some(filename) = chooser.filenames().first() {
+                        let shared_data_c = Rc::clone(&shared_data_rc);
+                        let shared_data_b = shared_data_c.borrow();
+                        let mut data_to_save = Vec::<Vec<cgmath_3d::Line3<T>>>::new();
+                        for s in shared_data_b.shapes.iter().flatten() {
+                            if let Some(ref centerline) = s.centerline {
+                                data_to_save.push(
+                                    centerline
+                                        .segments
+                                        .iter()
+                                        .map(|l| {
+                                            Line2::<T>::from([
+                                                l.start.x as T,
+                                                l.start.y as T,
+                                                l.end.x as T,
+                                                l.end.y as T,
+                                            ])
+                                            .copy_to_3d(cgmath_3d::Plane::XY)
+                                            .transform(
+                                                &shared_data_b.configuration.inverse_transform,
+                                            )
+                                        })
+                                        .collect(),
+                                );
+                                println!("adding a set ");
+                            }
+                        }
+                        if let Err(err) = linestring::cgmath_3d::save_to_obj_file(
+                            filename.to_str().unwrap(),
+                            "outline",
+                            data_to_save,
+                        ) {
+                            println!("Failed to write file: {:?}", err);
+                        }
+                    }
+                }
+                GuiMessage::MenuChoiceSaveCenterLine => {
+                    let mut chooser =
+                        dialog::NativeFileChooser::new(FileDialogType::BrowseSaveFile);
+
+                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_title("select file to save outline to");
+                    chooser.set_filter("*.obj");
+                    chooser.show();
+                    if let Some(filename) = chooser.filenames().first() {
+                        let shared_data_c = Rc::clone(&shared_data_rc);
+                        let shared_data_b = shared_data_c.borrow();
+                        let mut data_to_save = Vec::<Vec<cgmath_3d::Line3<T>>>::new();
+                        for s in shared_data_b.shapes.iter().flatten() {
+                            for r in s.centerline.iter() {
+                                for ls in r.line_strings.iter().flatten() {
+                                    data_to_save.push(
+                                        ls.transform(
+                                            &shared_data_b.configuration.inverse_transform,
+                                        )
+                                        .as_lines(),
+                                    );
+                                }
+                                for ls in r.lines.iter().flatten() {
+                                    data_to_save.push(vec![ls.transform(
+                                        &shared_data_b.configuration.inverse_transform,
+                                    )]);
+                                }
+                            }
+                        }
+                        if let Err(err) = linestring::cgmath_3d::save_to_obj_file(
+                            filename.to_str().unwrap(),
+                            "centerline",
+                            data_to_save,
+                        ) {
+                            println!("Failed to write file: {:?}", err);
+                        }
+                    }
+                }
             }
-            shared_data_bm.configuration.last_message = Some(msg);
-            re_calculate(shared_data_bm);
+            {
+                let mut shared_data_bm = shared_data_c2.borrow_mut();
+                shared_data_bm.configuration.last_message = Some(msg);
+                re_calculate(shared_data_bm);
+            }
             redraw();
         }
     }
@@ -416,7 +646,6 @@ fn main() -> Result<(), CenterlineError> {
 }
 
 /// Re-calculate the center-line and all of the other parameters
-/// Todo: rayon the whole chain per shape
 fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
     #[cfg(feature = "console_debug")]
     {
@@ -427,7 +656,7 @@ fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
     let configuration = shared_data_bm.configuration.clone();
     if let Some(mut shapes) = shapes {
         shapes = shapes
-            .into_iter() //into_par_iter()
+            .into_par_iter() // .into_iter()
             .filter_map(|x| threaded_re_calculate_error_handler(x, configuration))
             .collect();
         shared_data_bm.shapes = Some(shapes);
@@ -452,7 +681,7 @@ fn threaded_re_calculate_error_handler(
     }
 }
 
-/// This is what a single thread is supposed to do in sequence
+/// This is what a single thread does in sequence
 fn threaded_re_calculate(
     mut shape: Shape,
     configuration: Configuration,
@@ -553,7 +782,7 @@ fn simplify_centerline(
     Ok(())
 }
 
-/// Re-calculate voronoi input geometry
+/// Re-calculate voronoi input geometry by running simplify
 /// Todo: self intersection test -> fail
 fn recalculate_voronoi_input(
     shape: &mut Shape,
@@ -613,16 +842,19 @@ fn recalculate_voronoi_input(
 }
 
 /// Add data to the input lines.
-fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
-    let mut data_bm = data.borrow_mut();
+fn add_data_from_file(
+    shared_data: Rc<RefCell<SharedData>>,
+    filename: &str,
+) -> Result<(), CenterlineError> {
+    let mut shared_data_bm = shared_data.borrow_mut();
 
     let obj_set = {
-        let input = BufReader::new(File::open("example/rust.obj").unwrap());
+        let input = BufReader::new(File::open(filename).unwrap());
         obj::raw::parse_obj(input)?
     };
 
     let lines = centerline::remove_internal_edges(obj_set)?;
-    let mut total_aabb = cgmath_3d::Aabb3::default();
+    let mut total_aabb = cgmath_3d::Aabb3::<f32>::default();
     for l in lines.iter() {
         total_aabb.update_aabb(l.get_aabb());
     }
@@ -630,6 +862,13 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     println!("total aabb b4:{:?}", total_aabb);
 
     let (_plane, transform, voronoi_input_aabb) = get_transform(&total_aabb)?;
+    println!("Read file, plane was {:?}", _plane);
+    if let Some(inverse_transform) = transform.invert() {
+        shared_data_bm.configuration.inverse_transform = inverse_transform;
+    } else {
+        return Err(CenterlineError::CouldNotCalculateInverseMatrix);
+    }
+
     // transform each linestring to 2d
     let mut raw_data: Vec<LineStringSet2<T>> = lines
         .iter()
@@ -644,13 +883,13 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     {
         let mut screen_aabb = Aabb2::new(&Point2::new(W as T, H as T));
         screen_aabb.update_point(&Point2::new(0.0, 0.0));
-        data_bm.affine = SimpleAffine::new(&voronoi_input_aabb, &screen_aabb)?;
+        shared_data_bm.affine = SimpleAffine::new(&voronoi_input_aabb, &screen_aabb)?;
     }
 
     #[cfg(feature = "console_debug")]
     println!("Started with {} shapes", raw_data.len());
 
-    // try to consolidate shapes. If one AABB (a) totally engulfs another shape (b)
+    // try to consolidate shapes. If one AABB and convex hull (a) totally engulfs another shape (b)
     // we put shape (b) inside (a)
     'outer_loop: loop {
         // redo *every* test until nothing else can be done
@@ -684,7 +923,7 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
     }
     #[cfg(feature = "console_debug")]
     println!("Reduced to {} shapes", raw_data.len());
-    data_bm.shapes = Some(
+    shared_data_bm.shapes = Some(
         raw_data
             .into_iter()
             .map(|x| Shape {
@@ -694,7 +933,7 @@ fn add_data(data: Rc<RefCell<SharedData>>) -> Result<(), CenterlineError> {
             })
             .collect(),
     );
-
+    shared_data_bm.configuration.input_distance_dirty = true;
     Ok(())
 }
 

@@ -28,10 +28,6 @@ fn main() -> Result<(), CenterlineError> {
     );
 
     let rejected_edges = centerline.rejected_edges().unwrap();
-    //centerline
-    //    .diagram()
-    //    .debug_print_all(|x: usize| !rejected_edges.bit(x));
-
     for (eid, e) in centerline
         .diagram()
         .edges()
@@ -39,7 +35,7 @@ fn main() -> Result<(), CenterlineError> {
         .enumerate()
         .filter(|(i, _)| !rejected_edges.bit(*i))
     {
-        let twin = centerline.diagram().edge_get_twin(Some(e.get().get_id()));
+        let twin = centerline.diagram().edge_get(e.get_id())?.twin();
         let twin_i: Vec<bool> = twin.iter().map(|x| rejected_edges.bit(x.0)).collect();
         print!(
             "edge#{} {:?} {} {:?} {:?}",
@@ -49,15 +45,17 @@ fn main() -> Result<(), CenterlineError> {
             twin,
             twin_i.first()
         );
-        let eid = Some(e.get().get_id());
-        let v0 = centerline.diagram().edge_get_vertex0(eid).unwrap();
-        let v0 = centerline.diagram().vertex_get(Some(v0)).unwrap().get();
+        // all edges without v1 and/or v0 are already filtered out
 
-        let v1 = centerline.diagram().edge_get_vertex1(eid).unwrap();
-        let v1 = centerline.diagram().vertex_get(Some(v1)).unwrap().get();
+        let eid = e.get_id();
+        let v0 = centerline.diagram().edge_get_vertex0(eid)?.unwrap();
+        let v0 = centerline.diagram().vertex_get(v0)?;
 
-        let is_secondary = e.get().is_secondary();
-        let is_curved = e.get().is_curved();
+        let v1 = centerline.diagram().edge_get_vertex1(eid)?.unwrap();
+        let v1 = centerline.diagram().vertex_get(v1)?;
+
+        let is_secondary = e.is_secondary();
+        let is_curved = e.is_curved();
 
         println!(
             " ({:5.3},{:.3})-({:.3},{:.3}) v1:{} secondary:{} curved:{}",
@@ -79,14 +77,14 @@ fn main() -> Result<(), CenterlineError> {
     );
 
     println!("Output");
-    println!("");
+    println!();
     println!("linestrings:");
     for ls in centerline.line_strings.iter().flatten() {
         print!("linestring:");
         for point in ls.points().iter() {
             print!("[{},{},{}],", point.x, point.y, point.z);
         }
-        println!("");
+        println!();
     }
     println!();
     println!("lines:");
