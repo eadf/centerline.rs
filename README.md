@@ -48,7 +48,8 @@ Requires ```#![feature(hash_drain_filter)]``` i.e. ```+nightly```
 
 ## Todo
 
-- [ ] Group related shapes together based on convex hull and not just AABB
+- [ ] Shapes w/o a lead-in edge will not be drawn 
+- [x] Group related shapes together based on convex hull and not just AABB
 - [x] Rayon over each shape group
 - [x] Open file dialogue for fltk_gui
 - [x] Maybe, maybe make it possible to save result from fltk_gui :)
