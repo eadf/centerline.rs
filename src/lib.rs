@@ -16,6 +16,8 @@ use boostvoronoi::{InputType, OutputType};
 //use num_traits::Float;
 use cgmath::InnerSpace;
 use linestring::cgmath_2d;
+#[allow(unused_imports)]
+use linestring::cgmath_2d::convex_hull;
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
 use std::collections::VecDeque;
@@ -106,7 +108,6 @@ pub fn remove_internal_edges(
         // Ignore all points
         println!("Ignored point:{:?}", p);
     }
-    //dbg!(1);
     let mut all_edges = fnv::FnvHashSet::<(usize, usize)>::default();
     let mut internal_edges = fnv::FnvHashSet::<(usize, usize)>::default();
 
@@ -135,7 +136,6 @@ pub fn remove_internal_edges(
     //println!("Internal edges: {:?}", internal_edges);
     //println!("All edges: {:?}", all_edges);
     //println!("Vertices: {:?}", obj.positions);
-    //dbg!(2);
     for i in 0..obj.polygons.len() {
         // keep edges without twins, drop the rest
         let v = match &obj.polygons[i] {
@@ -180,7 +180,6 @@ pub fn remove_internal_edges(
     //println!("Internal edges: {:?}", internal_edges);
     //println!("All edges: {:?}", all_edges);
     //println!("Vertices: {:?}", obj.positions);
-    //dbg!(3);
     let _ = all_edges.drain_filter(|x| internal_edges.contains(x));
     // all_edges should now contain the outline and none of the internal edges.
     //println!("All edges: {:?}", all_edges);
@@ -219,7 +218,6 @@ pub fn remove_internal_edges(
             );
         }
     }
-    //dbg!(4);
     //println!("Vertices: {:?}", vertices.iter().map(|x|x.1.id).collect::<Vec<usize>>());
     // Do a recursive search on one vertex, paint all connected vertices with the same number.
     let mut shape_iter = 0..usize::MAX;
@@ -249,12 +247,10 @@ pub fn remove_internal_edges(
 
     //println!("Vertices: {:?}", vertices.iter().map(|x|x.1.id).collect::<Vec<usize>>());
     //println!("Color: {:?}", vertices.iter().map(|x|x.1.shape).collect::<Vec<Option<usize>>>());
-    //dbg!(5);
     // Spit all detected connected vertices into separate sets.
     // i.e. every vertex with the same color goes into the same set.
     let mut shape_iter = 0..usize::MAX;
     let mut shape_separation = Vec::<fnv::FnvHashMap<usize, Vertices>>::new();
-    //dbg!(5.5);
     loop {
         if vertices.is_empty() {
             break;
@@ -273,7 +269,6 @@ pub fn remove_internal_edges(
         shape_separation.push(drained);
     }
     //println!("shape_separation.len()={}", shape_separation.len());
-    //dbg!(6);
     // now we have a list of groups of vertices, each group are connected by edges.
     // Create lists of linestrings3 by walking the edges of each vertex set.
     let mut rv = Vec::<LineStringSet3<f32>>::with_capacity(shape_separation.len());
@@ -291,7 +286,6 @@ pub fn remove_internal_edges(
         let mut current: usize = started_with;
         let mut next: usize = started_with;
         let mut first_loop = true;
-        //dbg!(7);
 
         loop {
             prev = current;
@@ -306,7 +300,7 @@ pub fn remove_internal_edges(
                 //assert_eq!(newV.edges.len(),2);
                 next = *current_vertex.edges.iter().find(|x| **x != prev).unwrap();
 
-                //println!("current:{} prev:{} next:{} startedwith:{}", current, prev, next, started_with);
+                //println!("current:{} prev:{} next:{} started with:{}", current, prev, next, started_with);
             } else {
                 //println!("Could not get vertex data");
                 break;
@@ -317,7 +311,6 @@ pub fn remove_internal_edges(
             }
             first_loop = false;
         }
-        //dbg!(8);
         if als.points().last() != als.points().first() {
             println!(
                 "Linestring is not connected ! {:?} {:?}",
@@ -326,7 +319,6 @@ pub fn remove_internal_edges(
             );
             println!("Linestring is not connected ! {:?}", als.points());
         }
-        //dbg!(9);
         rvs.push(als);
         rv.push(rvs);
     }
@@ -408,7 +400,7 @@ where
         }
         vb.with_segments(self.segments.iter())?;
         self.diagram = vb.construct()?.into();
-        self.reject_edges()?;
+        self.reject_external_edges()?;
         #[cfg(feature = "console_debug")]
         println!(
             "build_voronoi()-> Rejected edges:{:?} {}",
@@ -424,9 +416,23 @@ where
         &mut self,
         dot_limit: F1,
         discrete_limit: F1,
+        ignored_regions: Option<
+            &Vec<(
+                linestring::cgmath_2d::Aabb2<F1>,
+                linestring::cgmath_2d::LineString2<F1>,
+            )>,
+        >,
     ) -> Result<(), CenterlineError> {
         self.normalized_dot_test(dot_limit)?;
-        self.traverse_edges(discrete_limit)?;
+        if let Some(ignored_regions) = ignored_regions {
+            self.traverse_edges(discrete_limit, ignored_regions)?;
+        } else {
+            let ignored_regions = Vec::<(
+                linestring::cgmath_2d::Aabb2<F1>,
+                linestring::cgmath_2d::LineString2<F1>,
+            )>::with_capacity(0);
+            self.traverse_edges(discrete_limit, &ignored_regions)?;
+        }
         Ok(())
     }
 
@@ -468,8 +474,7 @@ where
     }
 
     /// Mark infinite edges and their adjacent edges as EXTERNAL.
-    /// Color exterior edges also rejects some secondary edges
-    fn reject_edges(&mut self) -> Result<(), CenterlineError> {
+    fn reject_external_edges(&mut self) -> Result<(), CenterlineError> {
         let mut rejected_edges = yabf::Yabf::default();
         // ensure capacity of bit field by setting last bit +1 to true
         rejected_edges.set_bit(self.diagram().edges().len(), true);
@@ -486,7 +491,7 @@ where
                 rejected_edges.set_bit(twin_id.0, true);
             }
             if !self.diagram.edge_is_finite(edge_id)? {
-                self.recursively_reject_edge(edge_id, ColorFlag::EXTERNAL, &mut rejected_edges)?;
+                self.recursively_mark_connected_edges(edge_id, &mut rejected_edges, false)?;
 
                 //self.diagram
                 //    .edge_or_color(edge_id, ColorFlag::INFINITE.bits);
@@ -532,13 +537,12 @@ where
                     e = self.diagram.edge_get(e.unwrap())?.next();
 
                     if let Some(e) = e {
-                        if !Self::is_edge_rejected(e, &ignored_edges) {
+                        if !ignored_edges.bit(e.0) {
                             // all infinite edges should be rejected at this point, so
                             // all edges should contain a vertex0 and vertex1
 
                             let vertex0 = self.diagram.edge_get_vertex0(e)?;
-                            let vertex0 =
-                                vertex0.map_or(None, |x| Some(self.diagram.vertex_get(x)));
+                            let vertex0 = vertex0.map(|x| self.diagram.vertex_get(x));
 
                             if let Some(Ok(vertex0)) = vertex0 {
                                 let vertex0 = cgmath::Point2 {
@@ -546,8 +550,7 @@ where
                                     y: vertex0.y(),
                                 };
                                 let vertex1 = self.diagram.edge_get_vertex1(e)?;
-                                let vertex1 =
-                                    vertex1.map_or(None, |x| Some(self.diagram.vertex_get(x)));
+                                let vertex1 = vertex1.map(|x| self.diagram.vertex_get(x));
                                 if let Some(Ok(vertex1)) = vertex1 {
                                     let vertex1 = cgmath::Point2 {
                                         x: vertex1.x(),
@@ -627,76 +630,53 @@ where
         Ok(false)
     }
 
-    /// check if an edge is rejected based on the ignored_edges map
-    #[inline(always)]
-    fn is_edge_rejected(edge_id: VD::VoronoiEdgeIndex, ignored_edges: &yabf::Yabf) -> bool {
-        ignored_edges.bit(edge_id.0)
-    }
-
-    /// Set the color value of the edge
-    #[inline(always)]
-    fn reject_edge(
-        &self,
-        edge_id: VD::VoronoiEdgeIndex,
-        _color: ColorFlag,
-        ignored_edges: &mut yabf::Yabf,
-    ) {
-        //self.diagram.edge_or_color(edge_id, color.bits);
-        ignored_edges.set_bit(edge_id.0, true);
-    }
-
-    /*
-    #[allow(dead_code)]
-    #[inline(always)]
-    fn is_vertex_rejected(&self, vertex_id: Option<VD::VoronoiVertexIndex>) -> bool {
-        self.diagram
-            .vertex_get_color(vertex_id)
-            .map_or(true, |x| x != 0)
-    }*/
-
-    /*
-    #[inline(always)]
-    fn reject_vertex(&mut self, vertex_id: VD::VoronoiVertexIndex, color: ColorFlag) -> Result<(),CenterlineError>{
-        let _ = self.diagram.vertex_or_color(vertex_id, color.bits)?;
-        Ok(())
-    }*/
-
-    /// Recursively marks this edge and all other edges connecting to it as rejected.
+    /// Recursively marks this edge and all other edges connecting to it via vertex1.
     /// Recursion stops when connecting to input geometry.
-    fn recursively_reject_edge(
+    /// if 'initial' is set to true it will search both ways, (edge and the twin edge)
+    fn recursively_mark_connected_edges(
         &self,
         edge_id: VD::VoronoiEdgeIndex,
-        color: ColorFlag,
-        ignored_edges: &mut yabf::Yabf,
+        marked_edges: &mut yabf::Yabf,
+        initial: bool,
     ) -> Result<(), CenterlineError> {
-        if Self::is_edge_rejected(edge_id, ignored_edges) {
+        if marked_edges.bit(edge_id.0) {
             return Ok(());
         }
 
         let v1 = self.diagram.edge_get_vertex1(edge_id)?;
         if self.diagram.edge_get_vertex0(edge_id)?.is_some() && v1.is_none() {
             // this edge leads to nowhere, break recursion
-            self.reject_edge(edge_id, color, ignored_edges);
+            marked_edges.set_bit(edge_id.0, true);
             return Ok(());
         }
-        self.reject_edge(edge_id, color, ignored_edges);
-        self.reject_edge(
-            self.diagram.edge_get_twin_err(edge_id)?,
-            color,
-            ignored_edges,
-        );
+        marked_edges.set_bit(edge_id.0, true);
+
+        if initial {
+            self.recursively_mark_connected_edges(
+                self.diagram.edge_get_twin_err(edge_id)?,
+                marked_edges,
+                false,
+            )?;
+        } else {
+            marked_edges.set_bit(self.diagram.edge_get_twin_err(edge_id)?.0, true);
+        }
 
         if v1.is_none() || !self.diagram.edge_get(edge_id)?.is_primary() {
-            // break recursion if vertex1 is not found or it the edge is primary
+            // break recursion if vertex1 is not found or if the edge is not primary
             return Ok(());
         }
-        // v1 is never None from here one
+        // v1 is always Some from this point on
         if let Some(v1) = v1 {
+            let v1 = self.diagram.vertex_get(v1)?;
+            if v1.is_site_point() {
+                // break recursion on site points
+                return Ok(());
+            }
             //self.reject_vertex(v1, color);
-            let mut e = self.diagram.vertex_get(v1)?.get_incident_edge();
+            let mut e = v1.get_incident_edge();
             let v_incident_edge = e;
             while let Some(this_edge) = e {
-                self.recursively_reject_edge(this_edge, color, ignored_edges)?;
+                self.recursively_mark_connected_edges(this_edge, marked_edges, false)?;
                 e = self.diagram.edge_rot_next(this_edge)?;
                 if e == v_incident_edge {
                     break;
@@ -706,14 +686,67 @@ where
         Ok(())
     }
 
+    /// returns true if *all* of the 'edges' are contained inside one of the 'ignored_regions'
+    fn edges_are_inside_ignored_region(
+        &self,
+        edges: &yabf::Yabf,
+        ignored_regions: &[(
+            linestring::cgmath_2d::Aabb2<F1>,
+            linestring::cgmath_2d::LineString2<F1>,
+        )],
+    ) -> Result<bool, CenterlineError> {
+        let is_inside_region = |edge: VD::VoronoiEdgeIndex,
+                                region: &(
+            linestring::cgmath_2d::Aabb2<F1>,
+            linestring::cgmath_2d::LineString2<F1>,
+        )|
+         -> Result<bool, CenterlineError> {
+            let v0 = self.diagram.edge_get_vertex0(edge)?.unwrap();
+            let v0 = self.diagram.vertex_get(v0).unwrap();
+            let v0 = cgmath::Point2 {
+                x: v0.x(),
+                y: v0.y(),
+            };
+
+            let v1 = self.diagram.edge_get_vertex0(edge)?.unwrap();
+            let v1 = self.diagram.vertex_get(v1).unwrap();
+            let v1 = cgmath::Point2 {
+                x: v1.x(),
+                y: v1.y(),
+            };
+            Ok(region.0.contains_point_inclusive(&v0)
+                && region.0.contains_point_inclusive(&v1)
+                && convex_hull::ConvexHull::contains_point_inclusive(&region.1, &v0)
+                && convex_hull::ConvexHull::contains_point_inclusive(&region.1, &v1))
+        };
+
+        'outer: for region in ignored_regions.iter().enumerate() {
+            for edge in edges.into_iter() {
+                if !is_inside_region(VD::VoronoiEdgeIndex(edge), region.1)? {
+                    //println!("edge: {:?} is not inside region {}, skipping", edge, region.0);
+                    continue 'outer;
+                }
+            }
+            //println!("edges were all inside region {}", region.0);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// move across each edge and sample the lines and arcs
-    fn traverse_edges(&mut self, maxdist: F1) -> Result<(), CenterlineError> {
+    fn traverse_edges(
+        &mut self,
+        maxdist: F1,
+        ignored_regions: &[(
+            linestring::cgmath_2d::Aabb2<F1>,
+            linestring::cgmath_2d::LineString2<F1>,
+        )],
+    ) -> Result<(), CenterlineError> {
         // de-couple self and containers
         let mut lines = self.lines.take().unwrap();
         let mut linestrings = self.line_strings.take().unwrap();
 
-        // operate on a copy of self.ignored_edges
-        let mut ignored_edges = self.ignored_edges.clone().take().unwrap();
+        let ignored_edges = self.ignored_edges.take().unwrap();
         let mut used_edges = ignored_edges.clone();
         #[cfg(feature = "console_debug")]
         let mut edge_lines = fnv::FnvHashMap::<usize, [F1; 4]>::default();
@@ -721,25 +754,48 @@ where
         linestrings.clear();
         lines.clear();
 
-        for it in self.diagram.edges().iter().enumerate() {
-            let edge_id = VD::VoronoiEdgeIndex(it.0);
+        if !ignored_regions.is_empty() {
+            // find the groups of connected edges in this shape
+            let mut searched_edges_v = Vec::<yabf::Yabf>::new();
+            let mut searched_edges_s = ignored_edges.clone();
+            for it in self.diagram.edges().iter().enumerate() {
+                // can not use iter().filter() because of the borrow checker
+                if searched_edges_s.bit(it.0) {
+                    continue;
+                }
+                let mut edges = yabf::Yabf::with_capacity(self.diagram.edges.len());
+                self.recursively_mark_connected_edges(
+                    VD::VoronoiEdgeIndex(it.0),
+                    &mut edges,
+                    true,
+                )?;
+                searched_edges_s |= &edges;
+                searched_edges_v.push(edges);
+            }
 
-            /*
-            #[cfg(feature = "console_debug")]
-            if !ignored_edges.bit(edge_id.0) {
-                if let Some(line) = self.diagram.edge_as_line(Some(edge_id)) {
-                    let _ = edge_lines.insert(edge_id.0, line);
+            for edges in searched_edges_v.iter() {
+                if self.edges_are_inside_ignored_region(edges, ignored_regions)? {
+                    //println!("edges: are inside ignored region {:?}", edges);
+                    //used_edges.set_bit(edge_id.0, true);
+                    used_edges |= &edges;
+                    continue;
+                } else {
+                    //println!("edges: are NOT inside ignored regions {:?}", edges);
                 }
             }
-            */
-            // can not use iter().filter() because of the BC
-            if used_edges.bit(edge_id.0) {
+            // used_edges are now filled with the rejected edges
+        }
+
+        for it in self.diagram.edges().iter().enumerate() {
+            // can not use iter().filter() because of the borrow checker
+            if used_edges.bit(it.0) {
                 continue;
             }
+            let edge_id = VD::VoronoiEdgeIndex(it.0);
 
             self.traverse_edge(
                 edge_id,
-                &mut ignored_edges,
+                &ignored_edges,
                 &mut used_edges,
                 &mut lines,
                 &mut linestrings,
@@ -793,7 +849,7 @@ where
     fn traverse_edge(
         &self,
         seed_edge: VD::VoronoiEdgeIndex,
-        ignored_edges: &mut yabf::Yabf,
+        ignored_edges: &yabf::Yabf,
         used_edges: &mut yabf::Yabf,
         lines: &mut Vec<Line3<F1>>,
         linestrings: &mut Vec<LineString3<F1>>,
@@ -1112,17 +1168,19 @@ where
             y: Self::i2f(cell_point.y),
         };
         #[cfg(feature = "console_debug")]
-            {println!("sp:[{},{}]", start_point.x, start_point.y);
-        println!("ep:[{},{}]", end_point.x, end_point.y);
-        println!(
-            "cp:[{},{}] sg:[{},{},{},{}]",
-            cell_point.x,
-            cell_point.y,
-            segment_start_point.x,
-            segment_start_point.y,
-            segment_end_point.x,
-            segment_end_point.y
-        );}
+        {
+            println!("sp:[{},{}]", start_point.x, start_point.y);
+            println!("ep:[{},{}]", end_point.x, end_point.y);
+            println!(
+                "cp:[{},{}] sg:[{},{},{},{}]",
+                cell_point.x,
+                cell_point.y,
+                segment_start_point.x,
+                segment_start_point.y,
+                segment_end_point.x,
+                segment_end_point.y
+            );
+        }
 
         if edge.is_curved() {
             let arc = cgmath_2d::VoronoiParabolicArc::new(

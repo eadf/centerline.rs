@@ -368,7 +368,11 @@ fn bench_1(c: &mut Criterion) {
             let normalized_dot_product_limit: f32 = 0.38;
             let centerline_simplification: f32 = 0.1;
             let _ = centerline
-                .calculate_centerline(normalized_dot_product_limit, centerline_simplification)
+                .calculate_centerline(
+                    normalized_dot_product_limit,
+                    centerline_simplification,
+                    None,
+                )
                 .expect("bench_1");
         })
     });

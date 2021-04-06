@@ -69,7 +69,7 @@ fn main() -> Result<(), CenterlineError> {
         );
     }
 
-    centerline.calculate_centerline(0.0001, 0.1)?;
+    centerline.calculate_centerline(0.0001, 0.1, None)?;
     println!(
         "Result: lines:{}, linestrings:{}",
         centerline.lines.iter().flatten().count(),

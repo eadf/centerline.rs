@@ -50,7 +50,7 @@ Requires ```#![feature(hash_drain_filter)]``` i.e. ```+nightly```
 
 - [ ] Group related shapes together based on convex hull and not just AABB
 - [x] Rayon over each shape group
-- [ ] Open file dialogue for fltk_gui
-- [ ] Maybe, maybe make it possible to save result from fltk_gui :)
+- [x] Open file dialogue for fltk_gui
+- [x] Maybe, maybe make it possible to save result from fltk_gui :)
 - [ ] Make an option to remove inner center-lines of inner shapes. I.e. the holes in letters.
 - [ ] Add opengl to fltk_gui so that the 3D aspect of the center-line can be visualized. 
