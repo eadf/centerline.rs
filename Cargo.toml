@@ -14,15 +14,15 @@ num = "^0.4.0"
 fnv = "^1.0.7"
 vec_map = "^0.8.2"
 num-traits = "^0.2.14"
-#yabf = {version="^0.0.3",default-features=false}
+yabf = {version="^0.1.0",default-features=false}
 #yabf = {path = "../yabf.rs",default-features=false}
-yabf = { git = "https://github.com/eadf/yabf.rs",default-features=false}
+#yabf = { git = "https://github.com/eadf/yabf.rs",default-features=false}
 boostvoronoi = "^0.8.0"
 #boostvoronoi = {path = "../boostvoronoi.rs"}
 #boostvoronoi = { git = "https://github.com/eadf/boostvoronoi.rs" }
-#linestring = {version="^0.0.14",default-features=false,features=["impl-cgmath", "impl-rayon"]}
+linestring = {version="^0.1.0",default-features=false,features=["impl-cgmath", "impl-rayon"]}
 #linestring = {path = "../linestring.rs",default-features=false,features=["impl-cgmath", "impl-rayon"]}
-linestring = { git = "https://github.com/eadf/linestring.rs",default-features=false,features=["impl-cgmath","impl-rayon"]}
+#linestring = { git = "https://github.com/eadf/linestring.rs",default-features=false,features=["impl-cgmath","impl-rayon"]}
 cgmath = "^0.18.0"
 approx = "^0.4.0"
 obj-rs = "^0.6.2"

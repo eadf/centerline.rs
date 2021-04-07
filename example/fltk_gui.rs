@@ -995,6 +995,8 @@ fn get_transform(
         center, low, high
     );
 
+    // scale is always set to 256 times larger than the .obj file scale
+    // todo: make an option to define the voronoi input resolution
     let scale_transform = {
         let scale = 256.0 * (HF.min(WF) as F - 10.0)
             / std::cmp::max(
@@ -1038,14 +1040,15 @@ fn get_transform(
     let high0 = total_transform.transform_point(high0);
     #[cfg(feature = "console_debug")]
     let center0 = total_transform.transform_point(center0);
-    let mut voronoi_input_aabb = Aabb2::new(&Point2::new(low0.x, low.y));
-    voronoi_input_aabb.update_point(&Point2::new(high0.x, high0.y));
 
     #[cfg(feature = "console_debug")]
     println!(
         "Voronoi input AABB: Center {:?} low:{:?}, high:{:?}",
         center0, low0, high0
     );
+    let mut voronoi_input_aabb = Aabb2::new(&Point2::new(low0.x, low0.y));
+    voronoi_input_aabb.update_point(&Point2::new(high0.x, high0.y));
+
     println!("Voronoi input AABB: {:?}", voronoi_input_aabb);
 
     let inverse_total = total_transform.invert();
