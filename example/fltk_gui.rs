@@ -460,9 +460,12 @@ fn main() -> Result<(), CenterlineError> {
 
     let shared_data_c = Rc::clone(&shared_data_rc);
     let mut mouse_drag: Option<(i32, i32)> = None;
+
     wind.handle(move |ev| match ev {
         fltk::enums::Event::MouseWheel => {
             let event = &app::event_coords();
+            //println!("mouse wheel at x:{} y:{}", event.0, event.1);
+
             let mut shared_data_bm = shared_data_c.borrow_mut();
             let event_dy = app::event_dy();
             let reverse_middle = shared_data_bm
@@ -491,12 +494,13 @@ fn main() -> Result<(), CenterlineError> {
             shared_data_bm.affine.b_offset[0] += (event.0 as F) - new_middle[0];
             shared_data_bm.affine.b_offset[1] += (event.1 as F) - new_middle[1];
 
-            //println!("mouse wheel at dy:{:?} scale:{:?}", event_dy, shared_data_bm.visualizer.affine.scale);
             redraw();
             true
         }
         fltk::enums::Event::Drag => {
             let event = &app::event_coords();
+            //println!("mouse wheel at x:{} y:{}", event.0, event.1);
+
             if mouse_drag.is_none() {
                 mouse_drag = Some(*event);
             } else {

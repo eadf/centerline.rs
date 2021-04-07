@@ -746,8 +746,8 @@ where
         let mut lines = self.lines.take().unwrap();
         let mut linestrings = self.line_strings.take().unwrap();
 
-        let ignored_edges = self.ignored_edges.take().unwrap();
-        let mut used_edges = ignored_edges.clone();
+        let mut ignored_edges = self.ignored_edges.take().unwrap();
+
         #[cfg(feature = "console_debug")]
         let mut edge_lines = fnv::FnvHashMap::<usize, [F1; 4]>::default();
 
@@ -776,15 +776,16 @@ where
             for edges in searched_edges_v.iter() {
                 if self.edges_are_inside_ignored_region(edges, ignored_regions)? {
                     //println!("edges: are inside ignored region {:?}", edges);
-                    //used_edges.set_bit(edge_id.0, true);
-                    used_edges |= &edges;
+                    ignored_edges |= &edges;
                     continue;
                 } else {
                     //println!("edges: are NOT inside ignored regions {:?}", edges);
                 }
             }
-            // used_edges are now filled with the rejected edges
+            // ignored_edges are now filled with the rejected edges
         }
+
+        let mut used_edges = ignored_edges.clone();
 
         for it in self.diagram.edges().iter().enumerate() {
             // can not use iter().filter() because of the borrow checker
@@ -795,6 +796,31 @@ where
 
             self.traverse_edge(
                 edge_id,
+                false,
+                &ignored_edges,
+                &mut used_edges,
+                &mut lines,
+                &mut linestrings,
+                maxdist,
+            )?;
+        }
+
+        // loop over each edge again, make sure they were all used or properly ignored.
+        for it in self.diagram.edges().iter().enumerate() {
+            // can not use iter().filter() because of the borrow checker
+            if used_edges.bit(it.0) {
+                continue;
+            }
+            let edge_id = VD::VoronoiEdgeIndex(it.0);
+            #[cfg(feature = "console_debug")]
+            println!(
+                "Did not use all edges, forcing the use of edge:{}",
+                edge_id.0
+            );
+
+            self.traverse_edge(
+                edge_id,
+                true,
                 &ignored_edges,
                 &mut used_edges,
                 &mut lines,
@@ -838,7 +864,7 @@ where
             #[cfg(feature = "console_debug")]
             print!(" & {}", twin.0);
             if used_edges.bit(twin.0) {
-                print!(" TWIN was already used!!!!!");
+                eprintln!(" TWIN was already used!!!!! edge id:{}", twin.0);
             }
             used_edges.set_bit(twin.0, true);
         }
@@ -846,9 +872,14 @@ where
     }
 
     /// move across each adjacent edge and sample the lines and arcs
+    /// If force_seed_edge is set to false the method tries to
+    /// start at edges with only one connection (using seed_edge as a search start point).
+    /// Edge loops will not be processed in this mode.
+    /// If force_seed_edge is set to true, the seed_edge will be used as a starting point.
     fn traverse_edge(
         &self,
         seed_edge: VD::VoronoiEdgeIndex,
+        force_seed_edge: bool,
         ignored_edges: &yabf::Yabf,
         used_edges: &mut yabf::Yabf,
         lines: &mut Vec<Line3<F1>>,
@@ -862,43 +893,31 @@ where
         #[cfg(feature = "console_debug")]
         let mut mockup = Vec::<Vec<VD::VoronoiEdgeIndex>>::default();
 
-        let count = self
-            .diagram
-            .edge_rot_next_iterator(Some(seed_edge))
-            .filter(|x| !ignored_edges.bit(x.0))
-            .count();
-        if count == 1 {
+        let found_edge = force_seed_edge
+            || self
+                .diagram
+                .edge_rot_next_iterator(Some(seed_edge))
+                .filter(|x| !ignored_edges.bit(x.0))
+                .take(2) // we do not need more than 2 for the test
+                .count()
+                == 1;
+        if found_edge {
             let mut start_points = VecDeque::<VD::VoronoiEdgeIndex>::default();
             let mut current_edge_set = Vec::<VD::VoronoiEdgeIndex>::new();
             start_points.push_front(seed_edge);
-
             while !start_points.is_empty() {
                 #[cfg(feature = "console_debug")]
                 println!();
                 let edge = start_points.pop_front().unwrap();
-                /*#[cfg(feature = "console_debug")]
-                {
-                    let v0 = self.diagram().edge_get_vertex0(edge)?;
-                    let v0 = self.diagram().vertex_get(v0)?;
-
-                    let v1 = self.diagram().edge_get_vertex1(edge)?;
-                    let v1 = self.diagram().vertex_get(v1)?;
-
-                    print!(
-                        "now looking at {} i:{} u:{} ({:5.3},{:.3})->({:.3},{:.3})",
-                        edge.0,
-                        ignored_edges.bit(edge.0),
-                        used_edges.bit(edge.0),
-                        v0.x(),
-                        v0.y(),
-                        v1.x(),
-                        v1.y(),
-                    );
-                }*/
 
                 if ignored_edges.bit(edge.0) {
                     // Should never happen
-                    panic!();
+                    return Err(CenterlineError::InternalError {
+                        txt: format!(
+                            "should never happen: edge {} already in ignore list.",
+                            edge.0
+                        ),
+                    });
                 }
                 if used_edges.bit(edge.0) {
                     #[cfg(feature = "console_debug")]
