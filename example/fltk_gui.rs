@@ -104,11 +104,11 @@ pub enum GuiMessage {
 bitflags! {
     pub struct DrawFilterFlag: u32 {
         /// Edges considered to be outside all closed input geometry
-        const THREAD_GROUP_HULL = 0b000000000000001;
-        const THREAD_GROUP_AABB = 0b000000000000010;
-        const INTERNAL_GEOMETRY = 0b000000000000100;
-        const INTERNAL_EDGES    = 0b000000000001000;
-        const DRAW_ALL =          0b111111111111111;
+        const THREAD_GROUP_HULL     = 0b000000000000001;
+        const THREAD_GROUP_AABB     = 0b000000000000010;
+        const INTERNAL_GEOMETRY     = 0b000000000000100;
+        const REMOVE_INTERNAL_EDGES = 0b000000000001000;
+        const DRAW_ALL              = 0b111111111111111;
     }
 }
 
@@ -201,14 +201,14 @@ fn main() -> Result<(), CenterlineError> {
     let mut internal_geometry_button = RoundButton::default()
         .with_size(180, 25)
         .with_label("Internal geometry convex hull");
-    internal_geometry_button.toggle(true);
+    internal_geometry_button.toggle(false);
     internal_geometry_button.set_frame(FrameType::PlasticUpBox);
 
-    //let mut internal_edges_button = RoundButton::default()
-    //    .with_size(180, 25)
-    //    .with_label("Internal edges");
-    //internal_edges_button.toggle(true);
-    //internal_edges_button.set_frame(FrameType::PlasticUpBox);
+    let mut internal_edges_button = RoundButton::default()
+        .with_size(180, 25)
+        .with_label("Remove internal edges");
+    internal_edges_button.toggle(true);
+    internal_edges_button.set_frame(FrameType::PlasticUpBox);
 
     pack.end();
     wind.set_color(Color::White);
@@ -229,7 +229,8 @@ fn main() -> Result<(), CenterlineError> {
             last_message: None,
             draw_flag: DrawFilterFlag::DRAW_ALL
                 ^ DrawFilterFlag::THREAD_GROUP_AABB
-                ^ DrawFilterFlag::THREAD_GROUP_HULL,
+                ^ DrawFilterFlag::THREAD_GROUP_HULL
+                ^ DrawFilterFlag::INTERNAL_GEOMETRY,
             inverse_transform: Matrix4::<F>::one(),
         },
         affine: SimpleAffine::default(),
@@ -265,7 +266,10 @@ fn main() -> Result<(), CenterlineError> {
         sender,
         GuiMessage::Filter(DrawFilterFlag::INTERNAL_GEOMETRY),
     );
-    //internal_edges_button.emit(sender, GuiMessage::Filter(DrawFilterFlag::INTERNAL_EDGES));
+    internal_edges_button.emit(
+        sender,
+        GuiMessage::Filter(DrawFilterFlag::REMOVE_INTERNAL_EDGES),
+    );
     thread_group_aabb_button.emit(
         sender,
         GuiMessage::Filter(DrawFilterFlag::THREAD_GROUP_AABB),
@@ -537,6 +541,9 @@ fn main() -> Result<(), CenterlineError> {
                 GuiMessage::Filter(flag) => {
                     let mut shared_data_bm = shared_data_c1.borrow_mut();
                     shared_data_bm.configuration.draw_flag ^= flag;
+                    if flag.contains(DrawFilterFlag::REMOVE_INTERNAL_EDGES) {
+                        shared_data_bm.configuration.normalized_dot_dirty = true;
+                    }
                 }
                 GuiMessage::MenuChoiceLoad => {
                     let mut chooser = dialog::NativeFileChooser::new(FileDialogType::BrowseDir);
@@ -746,11 +753,23 @@ fn recalculate_centerline(
     #[cfg(feature = "console_debug")]
     println!("recalculate_centerline()");
     if let Some(ref mut centerline) = shape.centerline {
-        centerline.calculate_centerline(
-            configuration.normalized_dot,
-            configuration.centerline_scaled_distance,
-            shape.raw_data.get_internals(),
-        )?;
+        if configuration
+            .draw_flag
+            .contains(DrawFilterFlag::REMOVE_INTERNAL_EDGES)
+        {
+            centerline.calculate_centerline(
+                configuration.normalized_dot,
+                configuration.centerline_scaled_distance,
+                shape.raw_data.get_internals(),
+            )?;
+        } else {
+            // ignore the internal
+            centerline.calculate_centerline(
+                configuration.normalized_dot,
+                configuration.centerline_scaled_distance,
+                None,
+            )?;
+        }
         //println!("centerline.lines.len() = {:?}", centerline.lines.len());
     } else {
         dbg!(shape.centerline.is_none());
