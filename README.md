@@ -2,11 +2,11 @@
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.0.3/status.svg)](https://deps.rs/crate/centerline/0.0.3)
+[![dependency status](https://deps.rs/crate/centerline/0.1.0/status.svg)](https://deps.rs/crate/centerline/0.1.0)
 
 # Centerline
 
-![centerline](centerline.png)
+![centerline](centerline.gif)
 
 Finds 'a' centerline of closed 2D geometries.
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 

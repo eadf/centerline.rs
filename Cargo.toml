@@ -1,13 +1,13 @@
 [package]
 name = "centerline"
-version = "0.0.3"
+version = "0.1.0"
 authors = ["eadf"]
 edition = "2018"
 description = "Work in progress"
 readme = "README.md"
 repository = "https://github.com/eadf/centerline.rs"
 license = "AGPL-3.0"
-keywords = ["geometry"]
+keywords = ["centerline", "geometry", "data-structures", "mathematics"]
 
 [dependencies]
 num = "^0.4.0"

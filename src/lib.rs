@@ -871,6 +871,7 @@ where
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     /// move across each adjacent edge and sample the lines and arcs
     /// If force_seed_edge is set to false the method tries to
     /// start at edges with only one connection (using seed_edge as a search start point).
