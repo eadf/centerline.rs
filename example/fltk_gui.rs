@@ -71,6 +71,7 @@ use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
+use num::traits::FloatConst;
 
 #[macro_use]
 extern crate bitflags;
@@ -168,8 +169,8 @@ fn main() -> Result<(), CenterlineError> {
 
     let mut slider_dot = HorNiceSlider::default()
         .with_size(100, 25)
-        .with_label("normalized dot product limit");
-    slider_dot.set_value(0.38);
+        .with_label("Angle: 50.0000°");
+    slider_dot.set_value(0.55);
     slider_dot.set_frame(FrameType::PlasticUpBox);
     slider_dot.set_color(Color::White);
 
@@ -248,9 +249,10 @@ fn main() -> Result<(), CenterlineError> {
     });
 
     slider_dot.set_callback2(move |s| {
-        let value = s.value() as F;
-        s.set_label(&format!("   Normalized dot limit: {:.4}       ", value));
-        sender.send(GuiMessage::SliderDotChanged(value));
+        let value = s.value() * 90.0;
+        s.set_label(&format!("   Angle: {:.4}°      ", value));
+        let value = (f64::PI()*value/180.0).cos();
+        sender.send(GuiMessage::SliderDotChanged( value as F));
     });
 
     slider_post.set_callback2(move |s| {

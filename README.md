@@ -39,12 +39,12 @@ cargo +nightly run --example fltk_gui
 The example only displays 2D, but the generated center-line is actually 3D line segments.\
 The Z coordinate is the distance between the 2D center-line, and the geometry that created it. 
 
-It should be possible to replace the example input data by overwriting the ```rust.obj``` file in the ```example``` folder.
-The new .obj file just needs to be 2D in some axis aligned plane. Make sure there are no intersecting outer edges though.
+The example GUI takes `.obj` files as input. The `.obj` file needs to be 2D in some axis aligned plane (one of the coordinates needs to be zero). 
+Also make sure there are no intersecting outer edges.
 
 ## Rust requirement
 
-Requires ```#![feature(hash_drain_filter)]``` i.e. ```+nightly```
+Requires `#![feature(hash_drain_filter)]` and `#![feature(map_first_last)]` i.e. `rust +nightly`
 
 ## Todo
 
