@@ -15,11 +15,14 @@ use boostvoronoi::{InputType, OutputType};
 
 //use num_traits::Float;
 use cgmath::InnerSpace;
+use cgmath::SquareMatrix;
+use cgmath::Transform;
 use linestring::cgmath_2d;
 #[allow(unused_imports)]
 use linestring::cgmath_2d::convex_hull;
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
+use ordered_float::OrderedFloat;
 use std::collections::VecDeque;
 use std::ops::Neg;
 use thiserror::Error;
@@ -334,6 +337,117 @@ where
         rv.push(rvs);
     }
     Ok(rv)
+}
+
+/// Calculate an affine transform that will center, flip plane to XY, and scale the arbitrary shape
+/// so that it will fill the screen. For good measure the scale is then multiplied by 256 so the
+/// points makes half decent input data to boost voronoi (integer input only)
+/// 'desired_voronoi_dimension' is the maximum length of the voronoi input data aabb
+/// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
+/// maintain numerical precision
+pub fn get_transform<F>(
+    total_aabb: &cgmath_3d::Aabb3<F>,
+    desired_voronoi_dimension: F,
+) -> Result<
+    (
+        cgmath_3d::Plane,
+        cgmath::Matrix4<F>,
+        linestring::cgmath_2d::Aabb2<F>,
+    ),
+    CenterlineError,
+>
+where
+    F: cgmath::BaseFloat + Sync,
+{
+    let plane = if let Some(plane) = cgmath_3d::Plane::get_plane(total_aabb) {
+        plane
+    } else {
+        return Err(CenterlineError::InputNotPLane);
+    };
+
+    //println!("Total aabb {:?} Plane={:?}", total_aabb, plane);
+
+    let low = total_aabb.get_low().unwrap();
+    let high = total_aabb.get_high().unwrap();
+    let center = cgmath::point3(
+        (high.x + low.x) / F::from(2.0).unwrap(),
+        (high.y + low.y) / F::from(2.0).unwrap(),
+        (high.z + low.z) / F::from(2.0).unwrap(),
+    );
+    println!(
+        "Obj file AABB: Center {:?} low:{:?}, high:{:?}",
+        center, low, high
+    );
+
+    // scale is always set to 256 times larger than the .obj file scale
+    // todo: make an option to define the voronoi input resolution
+    let scale_transform = {
+        let scale = desired_voronoi_dimension
+            / std::cmp::max(
+                std::cmp::max(OrderedFloat(high.x - low.x), OrderedFloat(high.y - low.y)),
+                OrderedFloat(high.z - low.z),
+            )
+            .into_inner();
+
+        cgmath::Matrix4::from_scale(scale)
+    };
+
+    let center = scale_transform.transform_point(center);
+    let center_transform: cgmath::Matrix4<F> =
+        cgmath::Matrix4::from_translation(cgmath::Vector3::new(-center.x, -center.y, -center.z));
+
+    let plane_transform: cgmath::Matrix4<F> = {
+        let x = cgmath::Vector4::<F>::new(F::one(), F::zero(), F::zero(), F::zero());
+        let y = cgmath::Vector4::<F>::new(F::zero(), F::one(), F::zero(), F::zero());
+        let z = cgmath::Vector4::<F>::new(F::zero(), F::zero(), F::one(), F::zero());
+        let w = cgmath::Vector4::<F>::new(F::zero(), F::zero(), F::zero(), F::one());
+
+        match plane {
+            cgmath_3d::Plane::XY => cgmath::Matrix4::from_cols(x, y, z, w),
+            cgmath_3d::Plane::XZ => cgmath::Matrix4::from_cols(x, z, y, w),
+            cgmath_3d::Plane::ZY => cgmath::Matrix4::from_cols(z, y, x, w),
+        }
+    };
+
+    let total_transform = plane_transform * center_transform * scale_transform;
+
+    let low0 = total_aabb.get_low().unwrap();
+    let high0 = total_aabb.get_high().unwrap();
+    #[cfg(feature = "console_debug")]
+    let center0 = cgmath::point3(
+        (high0.x + low0.x) / 2.0,
+        (high0.y + low0.y) / 2.0,
+        (high0.z + low0.z) / 2.0,
+    );
+
+    let low0 = total_transform.transform_point(low0);
+    let high0 = total_transform.transform_point(high0);
+    #[cfg(feature = "console_debug")]
+    let center0 = total_transform.transform_point(center0);
+
+    #[cfg(feature = "console_debug")]
+    println!(
+        "Voronoi input AABB: Center {:?} low:{:?}, high:{:?}",
+        center0, low0, high0
+    );
+    let mut voronoi_input_aabb =
+        linestring::cgmath_2d::Aabb2::new(&cgmath::Point2::new(low0.x, low0.y));
+    voronoi_input_aabb.update_point(&cgmath::Point2::new(high0.x, high0.y));
+
+    println!("Voronoi input AABB: {:?}", voronoi_input_aabb);
+
+    let inverse_total = total_transform.invert();
+    if inverse_total.is_none() {
+        return Err(CenterlineError::CouldNotCalculateInverseMatrix);
+    }
+    //let inverse_total = inverse_total.unwrap();
+
+    //let low0 = inverse_total.transform_point(low0);
+    //let high0 = inverse_total.transform_point(high0);
+    //let center0 = inverse_total.transform_point(center0);
+    //println!("I Center {:?} low:{:?}, high:{:?}", center0, low0, high0);
+
+    Ok((plane, total_transform, voronoi_input_aabb))
 }
 
 /// Center line calculation object.

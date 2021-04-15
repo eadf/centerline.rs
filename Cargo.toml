@@ -29,6 +29,7 @@ obj-rs = "^0.6.2"
 thiserror = "^1.0.24"
 rayon = "^1.5.0"
 bitflags = "^1.2.1"
+ordered-float = "^2.1.1"
 
 [[example]]
 name = "fltk_gui"
@@ -41,7 +42,6 @@ path = "example/cli.rs"
 [dev-dependencies]
 fltk = "^0.16.1"
 itertools = "^0.10.0"
-ordered-float = "^2.1.1"
 criterion = "^0.3.4"
 
 [features]
