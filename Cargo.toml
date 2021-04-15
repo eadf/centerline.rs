@@ -17,7 +17,7 @@ num-traits = "^0.2.14"
 yabf = {version="^0.1.0",default-features=false}
 #yabf = {path = "../yabf.rs",default-features=false}
 #yabf = { git = "https://github.com/eadf/yabf.rs",default-features=false}
-boostvoronoi = "^0.8.0"
+boostvoronoi = "^0.8.1"
 #boostvoronoi = {path = "../boostvoronoi.rs"}
 #boostvoronoi = { git = "https://github.com/eadf/boostvoronoi.rs" }
 linestring = {version="^0.1.0",default-features=false,features=["impl-cgmath", "impl-rayon"]}

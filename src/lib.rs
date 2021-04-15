@@ -73,10 +73,9 @@ bitflags! {
 
 #[derive(Debug)]
 struct Vertices {
-    id: usize,
-    point: (f32, f32, f32, f32),
-    edges: Vec<usize>,
-    shape: Option<usize>,
+    id: usize,            // index into the point3 list
+    edges: Vec<usize>,    // list of edges this vertex is part of
+    shape: Option<usize>, // shape id
 }
 
 fn paint_vertex(vertices: &mut fnv::FnvHashMap<usize, Vertices>, vertex_id: usize, color: usize) {
@@ -100,10 +99,11 @@ fn paint_vertex(vertices: &mut fnv::FnvHashMap<usize, Vertices>, vertex_id: usiz
     }
 }
 
+#[allow(clippy::type_complexity)]
 /// remove internal edges from a wavefront-obj object
 pub fn remove_internal_edges(
     obj: obj::raw::RawObj,
-) -> Result<Vec<LineStringSet3<f32>>, CenterlineError> {
+) -> Result<(fnv::FnvHashSet<(usize, usize)>, Vec<cgmath::Point3<f32>>), CenterlineError> {
     for p in obj.points.iter() {
         // Ignore all points
         println!("Ignored point:{:?}", p);
@@ -182,11 +182,32 @@ pub fn remove_internal_edges(
     //println!("Vertices: {:?}", obj.positions);
     let _ = all_edges.drain_filter(|x| internal_edges.contains(x));
     // all_edges should now contain the outline and none of the internal edges.
+    let vertices: Vec<cgmath::Point3<f32>> = obj
+        .positions
+        .into_iter()
+        .map(|x| cgmath::Point3 {
+            x: x.0,
+            y: x.1,
+            z: x.2,
+        })
+        .collect();
+
+    Ok((all_edges, vertices))
+}
+
+/// Group input edges into connected shapes
+pub fn divide_into_shapes<T>(
+    edge_set: fnv::FnvHashSet<(usize, usize)>,
+    points: Vec<cgmath::Point3<T>>,
+) -> Result<Vec<LineStringSet3<T>>, CenterlineError>
+where
+    T: cgmath::BaseFloat + Sync,
+{
     //println!("All edges: {:?}", all_edges);
     // put all edges into a hashmap of Vertices, this will make it possible to
     // arrange them in the order they are connected
     let mut vertices = fnv::FnvHashMap::<usize, Vertices>::default();
-    for e in all_edges.iter() {
+    for e in edge_set.iter() {
         let id = e.0;
         let other = e.1;
         if let Some(v) = vertices.get_mut(&id) {
@@ -196,7 +217,6 @@ pub fn remove_internal_edges(
                 id,
                 Vertices {
                     id,
-                    point: obj.positions[id],
                     edges: vec![other],
                     shape: None,
                 },
@@ -211,7 +231,6 @@ pub fn remove_internal_edges(
                 id,
                 Vertices {
                     id,
-                    point: obj.positions[id],
                     edges: vec![other],
                     shape: None,
                 },
@@ -268,18 +287,17 @@ pub fn remove_internal_edges(
             .collect();
         shape_separation.push(drained);
     }
-    //println!("shape_separation.len()={}", shape_separation.len());
     // now we have a list of groups of vertices, each group are connected by edges.
     // Create lists of linestrings3 by walking the edges of each vertex set.
-    let mut rv = Vec::<LineStringSet3<f32>>::with_capacity(shape_separation.len());
+    let mut rv = Vec::<LineStringSet3<T>>::with_capacity(shape_separation.len());
 
     for rvi in shape_separation.iter() {
         if rvi.is_empty() {
             continue;
         }
 
-        let mut rvs = cgmath_3d::LineStringSet3::<f32>::with_capacity(shape_separation.len());
-        let mut als = cgmath_3d::LineString3::<f32>::with_capacity(rvi.len());
+        let mut rvs = cgmath_3d::LineStringSet3::<T>::with_capacity(shape_separation.len());
+        let mut als = cgmath_3d::LineString3::<T>::with_capacity(rvi.len());
 
         let started_with: usize = rvi.iter().next().unwrap().1.id;
         let mut prev: usize;
@@ -291,18 +309,11 @@ pub fn remove_internal_edges(
             prev = current;
             current = next;
             if let Some(current_vertex) = rvi.get(&current) {
-                als.push(cgmath::point3(
-                    current_vertex.point.0,
-                    current_vertex.point.1,
-                    current_vertex.point.2,
-                ));
+                als.push(points[current]);
 
                 //assert_eq!(newV.edges.len(),2);
                 next = *current_vertex.edges.iter().find(|x| **x != prev).unwrap();
-
-                //println!("current:{} prev:{} next:{} started with:{}", current, prev, next, started_with);
             } else {
-                //println!("Could not get vertex data");
                 break;
             }
             // allow the start point to be added twice (in case of a loop)
@@ -322,7 +333,6 @@ pub fn remove_internal_edges(
         rvs.push(als);
         rv.push(rvs);
     }
-    //dbg!(10);
     Ok(rv)
 }
 
@@ -389,7 +399,7 @@ where
 
     /// builds the voronoi diagram and filter out infinite edges and other 'outside' geometry
     pub fn build_voronoi(&mut self) -> Result<(), CenterlineError> {
-        let mut vb = VB::Builder::new();
+        let mut vb = VB::Builder::default();
         #[cfg(feature = "console_debug")]
         {
             print!("build_voronoi()-> input segments:[");

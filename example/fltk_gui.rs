@@ -64,6 +64,7 @@ use itertools::Itertools;
 use linestring::cgmath_2d::{convex_hull, Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::LineString3;
+use num::traits::FloatConst;
 use obj;
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
@@ -71,7 +72,6 @@ use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
-use num::traits::FloatConst;
 
 #[macro_use]
 extern crate bitflags;
@@ -251,8 +251,8 @@ fn main() -> Result<(), CenterlineError> {
     slider_dot.set_callback2(move |s| {
         let value = s.value() * 90.0;
         s.set_label(&format!("   Angle: {:.4}°      ", value));
-        let value = (f64::PI()*value/180.0).cos();
-        sender.send(GuiMessage::SliderDotChanged( value as F));
+        let value = (f64::PI() * value / 180.0).cos();
+        sender.send(GuiMessage::SliderDotChanged(value as F));
     });
 
     slider_post.set_callback2(move |s| {
@@ -882,6 +882,8 @@ fn add_data_from_file(
     };
 
     let lines = centerline::remove_internal_edges(obj_set)?;
+    let lines = centerline::divide_into_shapes(lines.0, lines.1)?;
+
     let mut total_aabb = cgmath_3d::Aabb3::<f32>::default();
     for l in lines.iter() {
         total_aabb.update_aabb(l.get_aabb());
