@@ -6,14 +6,12 @@
 #![deny(unused_imports)]
 #![deny(unused_imports)]
 #![feature(hash_drain_filter)]
-//#![feature(test)]
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;
 use boostvoronoi::sync_diagram as VSD;
 use boostvoronoi::{InputType, OutputType};
 
-//use num_traits::Float;
 use cgmath::InnerSpace;
 use cgmath::SquareMatrix;
 use cgmath::Transform;
@@ -23,6 +21,8 @@ use linestring::cgmath_2d::convex_hull;
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
 use ordered_float::OrderedFloat;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
 use std::collections::VecDeque;
 use std::ops::Neg;
 use thiserror::Error;
@@ -33,7 +33,7 @@ extern crate bitflags;
 #[derive(Error, Debug)]
 pub enum CenterlineError {
     #[error("Something is wrong with the internal logic")]
-    InternalError { txt: String },
+    InternalError(String),
 
     #[error("Something is wrong with the input data")]
     CouldNotCalculateInverseMatrix,
@@ -45,7 +45,7 @@ pub enum CenterlineError {
     InputNotPLane,
 
     #[error("Invalid data")]
-    InvalidData,
+    InvalidData(String),
 
     #[error(transparent)]
     BvError(#[from] boostvoronoi::BvError),
@@ -204,7 +204,7 @@ pub fn divide_into_shapes<T>(
     points: Vec<cgmath::Point3<T>>,
 ) -> Result<Vec<LineStringSet3<T>>, CenterlineError>
 where
-    T: cgmath::BaseFloat + Sync,
+    T: cgmath::BaseFloat + Sync + Send,
 {
     //println!("All edges: {:?}", all_edges);
     // put all edges into a hashmap of Vertices, this will make it possible to
@@ -242,19 +242,27 @@ where
     }
     //println!("Vertices: {:?}", vertices.iter().map(|x|x.1.id).collect::<Vec<usize>>());
     // Do a recursive search on one vertex, paint all connected vertices with the same number.
-    let mut shape_iter = 0..usize::MAX;
+    let mut unique_shape_id_generator = 0..usize::MAX;
     let vertex_ids: Vec<usize> = vertices.iter().map(|x| *x.0).collect();
+    let mut highest_shape_id: usize = usize::MAX;
     for vertex_id in vertex_ids.into_iter() {
         if let Some(v) = vertices.get(&vertex_id) {
             if v.shape.is_some() {
                 continue;
             }
         }
+        highest_shape_id = unique_shape_id_generator.next().unwrap();
         // found an un-painted vertex
-        paint_vertex(&mut vertices, vertex_id, shape_iter.next().unwrap());
+        paint_vertex(&mut vertices, vertex_id, highest_shape_id);
+    }
+    let highest_shape_id = highest_shape_id;
+    if highest_shape_id == usize::MAX {
+        return Err(CenterlineError::InternalError(
+            "Could not find any shapes to separate".to_string(),
+        ));
     }
 
-    for v in vertices.iter() {
+    /*for v in vertices.iter() {
         if *v.0 != v.1.id {
             println!("Id and key does not match key:{} id:{}", v.0, v.1.id);
         }
@@ -265,20 +273,24 @@ where
             );
             //panic!();
         }
-    }
+    }*/
 
     //println!("Vertices: {:?}", vertices.iter().map(|x|x.1.id).collect::<Vec<usize>>());
     //println!("Color: {:?}", vertices.iter().map(|x|x.1.shape).collect::<Vec<Option<usize>>>());
     // Spit all detected connected vertices into separate sets.
     // i.e. every vertex with the same color goes into the same set.
-    let mut shape_iter = 0..usize::MAX;
+    //println!("vertices:{:?}", vertices);
     let mut shape_separation = Vec::<fnv::FnvHashMap<usize, Vertices>>::new();
-    loop {
+    for current_shape in 0..=highest_shape_id {
         if vertices.is_empty() {
-            break;
+            println!("vertices:{:?}", vertices);
+            println!("current_shape:{}", highest_shape_id);
+            println!("shape_separation:{:?}", shape_separation);
+
+            return Err(CenterlineError::InternalError(
+                "Could not separate all shapes, ran out of vertices.".to_string(),
+            ));
         }
-        let current_shape = shape_iter.next().unwrap();
-        //let mut shape = fnv::FnvHashMap::<usize, Vertices>::new();
         let drained = vertices
             .drain_filter(|_, x| {
                 if let Some(shape) = x.shape {
@@ -290,59 +302,71 @@ where
             .collect();
         shape_separation.push(drained);
     }
+    drop(vertices);
     // now we have a list of groups of vertices, each group are connected by edges.
+
+    let shape_separation = shape_separation;
+
     // Create lists of linestrings3 by walking the edges of each vertex set.
-    let mut rv = Vec::<LineStringSet3<T>>::with_capacity(shape_separation.len());
-
-    for rvi in shape_separation.iter() {
-        if rvi.is_empty() {
-            continue;
-        }
-
-        let mut rvs = cgmath_3d::LineStringSet3::<T>::with_capacity(shape_separation.len());
-        let mut als = cgmath_3d::LineString3::<T>::with_capacity(rvi.len());
-
-        let started_with: usize = rvi.iter().next().unwrap().1.id;
-        let mut prev: usize;
-        let mut current: usize = started_with;
-        let mut next: usize = started_with;
-        let mut first_loop = true;
-
-        loop {
-            prev = current;
-            current = next;
-            if let Some(current_vertex) = rvi.get(&current) {
-                als.push(points[current]);
-
-                //assert_eq!(newV.edges.len(),2);
-                next = *current_vertex
-                    .edges
-                    .iter()
-                    .find(|x| **x != prev)
-                    .ok_or(CenterlineError::InternalError {
-                        txt: "Unknown error. Todo:give description".to_string(),
-                    })?;
-            } else {
-                break;
+    shape_separation
+        .into_par_iter()
+        .map(|rvi| -> Result<LineStringSet3<T>, CenterlineError> {
+            if rvi.is_empty() {
+                return Err(CenterlineError::InternalError(
+                    "rvi.is_empty() Todo:give better description".to_string(),
+                ));
             }
-            // allow the start point to be added twice (in case of a loop)
-            if !first_loop && current == started_with {
-                break;
+            let mut loops = 0;
+
+            let mut rvs = cgmath_3d::LineStringSet3::<T>::with_capacity(rvi.len());
+            let mut als = cgmath_3d::LineString3::<T>::with_capacity(rvi.len());
+
+            let started_with: usize = rvi.iter().next().unwrap().1.id;
+            let mut prev: usize;
+            let mut current: usize = started_with;
+            let mut next: usize = started_with;
+            let mut first_loop = true;
+
+            loop {
+                prev = current;
+                current = next;
+                if let Some(current_vertex) = rvi.get(&current) {
+                    als.push(points[current]);
+
+                    //assert_eq!(newV.edges.len(),2);
+                    next = *current_vertex.edges.iter().find(|x| **x != prev).ok_or(
+                        CenterlineError::InternalError(
+                            "Could not find next vertex. Todo:give better description".to_string(),
+                        ),
+                    )?;
+                } else {
+                    break;
+                }
+                // allow the start point to be added twice (in case of a loop)
+                if !first_loop && current == started_with {
+                    break;
+                }
+                first_loop = false;
+                loops += 1;
+                if loops > rvi.len() + 1 {
+                    return Err(CenterlineError::InvalidData(
+                        "It seems like one (or more) of the line strings does not form a loop."
+                            .to_string(),
+                    ));
+                }
             }
-            first_loop = false;
-        }
-        if als.points().last() != als.points().first() {
-            println!(
-                "Linestring is not connected ! {:?} {:?}",
-                als.points().first(),
-                als.points().last()
-            );
-            println!("Linestring is not connected ! {:?}", als.points());
-        }
-        rvs.push(als);
-        rv.push(rvs);
-    }
-    Ok(rv)
+            if als.points().last() != als.points().first() {
+                println!(
+                    "Linestring is not connected ! {:?} {:?}",
+                    als.points().first(),
+                    als.points().last()
+                );
+                println!("Linestring is not connected ! {:?}", als.points());
+            }
+            rvs.push(als);
+            Ok(rvs)
+        })
+        .collect()
 }
 
 #[inline(always)]
@@ -403,27 +427,41 @@ where
             return Err(CenterlineError::InputNotPLane);
         };
 
-    //println!("Total aabb {:?} Plane={:?}", total_aabb, plane);
+    println!(
+        "get_transform_relaxed desired_voronoi_dimension:{:?}",
+        desired_voronoi_dimension
+    );
 
     let low = total_aabb.get_low().unwrap();
     let high = total_aabb.get_high().unwrap();
+    let delta = high - low;
     let center = cgmath::point3(
         (high.x + low.x) / F::from(2.0).unwrap(),
         (high.y + low.y) / F::from(2.0).unwrap(),
         (high.z + low.z) / F::from(2.0).unwrap(),
     );
     println!(
-        "Obj file AABB: Center {:?} low:{:?}, high:{:?}",
-        center, low, high
+        "Input data AABB: Center:({:?}, {:?}, {:?})",
+        center.x, center.y, center.z,
+    );
+    println!(
+        "                   high:({:?}, {:?}, {:?})",
+        high.x, high.y, high.z,
+    );
+    println!(
+        "                    low:({:?}, {:?}, {:?})",
+        low.x, low.y, low.z,
+    );
+    println!(
+        "                  delta:({:?}, {:?}, {:?})",
+        delta.x, delta.y, delta.z,
     );
 
-    // scale is always set to 256 times larger than the .obj file scale
-    // todo: make an option to define the voronoi input resolution
     let scale_transform = {
         let scale = desired_voronoi_dimension
             / std::cmp::max(
-                std::cmp::max(OrderedFloat(high.x - low.x), OrderedFloat(high.y - low.y)),
-                OrderedFloat(high.z - low.z),
+                std::cmp::max(OrderedFloat(delta.x), OrderedFloat(delta.y)),
+                OrderedFloat(delta.z),
             )
             .into_inner();
 
@@ -449,17 +487,17 @@ where
 
     let total_transform = plane_transform * center_transform * scale_transform;
 
-    let low0 = total_aabb.get_low().unwrap();
     let high0 = total_aabb.get_high().unwrap();
-    #[cfg(feature = "console_debug")]
-    let center0 = cgmath::point3(
-        (high0.x + low0.x) / 2.0,
-        (high0.y + low0.y) / 2.0,
-        (high0.z + low0.z) / 2.0,
-    );
+    let low0 = total_aabb.get_low().unwrap();
 
     let low0 = total_transform.transform_point(low0);
     let high0 = total_transform.transform_point(high0);
+    let delta0 = high0 - low0;
+    let center0 = cgmath::point3(
+        (high0.x + low0.x) / F::from(2.0).unwrap(),
+        (high0.y + low0.y) / F::from(2.0).unwrap(),
+        (high0.z + low0.z) / F::from(2.0).unwrap(),
+    );
     #[cfg(feature = "console_debug")]
     let center0 = total_transform.transform_point(center0);
 
@@ -472,7 +510,22 @@ where
         linestring::cgmath_2d::Aabb2::new(&cgmath::Point2::new(low0.x, low0.y));
     voronoi_input_aabb.update_point(&cgmath::Point2::new(high0.x, high0.y));
 
-    println!("Voronoi input AABB: {:?}", voronoi_input_aabb);
+    println!(
+        "Voronoi input AABB: Center:({:?}, {:?}, {:?})",
+        center0.x, center0.y, center0.z,
+    );
+    println!(
+        "                   high:({:?}, {:?}, {:?})",
+        high0.x, high0.y, high0.z,
+    );
+    println!(
+        "                    low:({:?}, {:?}, {:?})",
+        low0.x, low0.y, low0.z,
+    );
+    println!(
+        "                  delta:({:?}, {:?}, {:?})",
+        delta0.x, delta0.y, delta0.z,
+    );
 
     let inverse_total = total_transform.invert();
     if inverse_total.is_none() {
@@ -1118,12 +1171,10 @@ where
 
                 if ignored_edges.bit(edge.0) {
                     // Should never happen
-                    return Err(CenterlineError::InternalError {
-                        txt: format!(
-                            "should never happen: edge {} already in ignore list.",
-                            edge.0
-                        ),
-                    });
+                    return Err(CenterlineError::InternalError(format!(
+                        "should never happen: edge {} already in ignore list.",
+                        edge.0
+                    )));
                 }
                 if used_edges.bit(edge.0) {
                     #[cfg(feature = "console_debug")]
