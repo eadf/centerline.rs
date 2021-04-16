@@ -315,7 +315,13 @@ where
                 als.push(points[current]);
 
                 //assert_eq!(newV.edges.len(),2);
-                next = *current_vertex.edges.iter().find(|x| **x != prev).unwrap();
+                next = *current_vertex
+                    .edges
+                    .iter()
+                    .find(|x| **x != prev)
+                    .ok_or(CenterlineError::InternalError {
+                        txt: "Unknown error. Todo:give description".to_string(),
+                    })?;
             } else {
                 break;
             }
@@ -339,6 +345,7 @@ where
     Ok(rv)
 }
 
+#[inline(always)]
 /// Calculate an affine transform that will center, flip plane to XY, and scale the arbitrary shape
 /// so that it will fill the screen. For good measure the scale is then multiplied by 256 so the
 /// points makes half decent input data to boost voronoi (integer input only)
@@ -359,11 +366,42 @@ pub fn get_transform<F>(
 where
     F: cgmath::BaseFloat + Sync,
 {
-    let plane = if let Some(plane) = cgmath_3d::Plane::get_plane(total_aabb) {
-        plane
-    } else {
-        return Err(CenterlineError::InputNotPLane);
-    };
+    get_transform_relaxed(
+        total_aabb,
+        desired_voronoi_dimension,
+        F::default_epsilon(),
+        F::default_max_ulps(),
+    )
+}
+
+/// Calculate an affine transform that will center, flip plane to XY, and scale the arbitrary shape
+/// so that it will fill the screen. For good measure the scale is then multiplied by 256 so the
+/// points makes half decent input data to boost voronoi (integer input only)
+/// 'desired_voronoi_dimension' is the maximum length of the voronoi input data aabb
+/// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
+/// maintain numerical precision
+pub fn get_transform_relaxed<F>(
+    total_aabb: &cgmath_3d::Aabb3<F>,
+    desired_voronoi_dimension: F,
+    epsilon: F,
+    max_ulps: u32,
+) -> Result<
+    (
+        cgmath_3d::Plane,
+        cgmath::Matrix4<F>,
+        linestring::cgmath_2d::Aabb2<F>,
+    ),
+    CenterlineError,
+>
+where
+    F: cgmath::BaseFloat + Sync,
+{
+    let plane =
+        if let Some(plane) = cgmath_3d::Plane::get_plane_relaxed(total_aabb, epsilon, max_ulps) {
+            plane
+        } else {
+            return Err(CenterlineError::InputNotPLane);
+        };
 
     //println!("Total aabb {:?} Plane={:?}", total_aabb, plane);
 
@@ -448,6 +486,49 @@ where
     //println!("I Center {:?} low:{:?}, high:{:?}", center0, low0, high0);
 
     Ok((plane, total_transform, voronoi_input_aabb))
+}
+
+/// try to consolidate shapes. If one AABB and convex hull (a) totally engulfs another shape (b)
+/// we put shape (b) inside (a)
+pub fn consolidate_shapes<F>(
+    mut raw_data: Vec<linestring::cgmath_2d::LineStringSet2<F>>,
+) -> Result<Vec<linestring::cgmath_2d::LineStringSet2<F>>, CenterlineError>
+where
+    F: cgmath::BaseFloat + Sync,
+{
+    'outer_loop: loop {
+        // redo *every* test until nothing else can be done
+        for i in 0..raw_data.len() {
+            for j in i + 1..raw_data.len() {
+                if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb())
+                    && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
+                        &raw_data[i].get_convex_hull().as_ref().unwrap(),
+                        &raw_data[j].get_convex_hull().as_ref().unwrap(),
+                    )
+                {
+                    // move stuff from j to i via a temp because of borrow checker
+                    let mut stolen_line_j = linestring::cgmath_2d::LineStringSet2::steal_from(
+                        raw_data.get_mut(j).unwrap(),
+                    );
+                    let line_i = raw_data.get_mut(i).unwrap();
+                    line_i.take_from_internal(&mut stolen_line_j)?;
+                    let _ = raw_data.remove(j);
+                    continue 'outer_loop;
+                } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb()) {
+                    // move stuff from i to j via a temp because of borrow checker
+                    let mut stolen_line_i = linestring::cgmath_2d::LineStringSet2::steal_from(
+                        raw_data.get_mut(i).unwrap(),
+                    );
+                    let line_j = raw_data.get_mut(j).unwrap();
+                    line_j.take_from_internal(&mut stolen_line_i)?;
+                    let _ = raw_data.remove(i);
+                    continue 'outer_loop;
+                }
+            }
+        }
+        break 'outer_loop;
+    }
+    Ok(raw_data)
 }
 
 /// Center line calculation object.
@@ -1349,7 +1430,7 @@ where
                         x: Self::i2f(cell_point.x),
                         y: Self::i2f(cell_point.y),
                     };
-                    linestring::cgmath_2d::distance_to_point_squared(&cell_point, &start_point)
+                    -linestring::cgmath_2d::distance_to_point_squared(&cell_point, &start_point)
                         .sqrt()
                 } else {
                     let segment = self.retrieve_segment(cell_id)?;
@@ -1361,7 +1442,7 @@ where
                         x: Self::i2f(segment.end.x),
                         y: Self::i2f(segment.end.y),
                     };
-                    linestring::cgmath_2d::distance_to_line_squared_safe(
+                    -linestring::cgmath_2d::distance_to_line_squared_safe(
                         &segment_start_point,
                         &segment_end_point,
                         &start_point,
@@ -1385,7 +1466,7 @@ where
                             x: Self::i2f(cell_point.x),
                             y: Self::i2f(cell_point.y),
                         };
-                        linestring::cgmath_2d::distance_to_point_squared(&cell_point, &end_point)
+                        -linestring::cgmath_2d::distance_to_point_squared(&cell_point, &end_point)
                             .sqrt()
                     } else {
                         let segment = self.retrieve_segment(cell_id)?;
@@ -1397,7 +1478,7 @@ where
                             x: Self::i2f(segment.end.x),
                             y: Self::i2f(segment.end.y),
                         };
-                        linestring::cgmath_2d::distance_to_line_squared_safe(
+                        -linestring::cgmath_2d::distance_to_line_squared_safe(
                             &segment_start_point,
                             &segment_end_point,
                             &end_point,

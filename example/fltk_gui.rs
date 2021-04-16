@@ -46,7 +46,7 @@ licenses /why-not-lgpl.html>.
 
 use centerline::Centerline;
 use centerline::CenterlineError;
-use cgmath::{Matrix4, One, Transform};
+use cgmath::{Matrix4, One};
 use cgmath::{Point2, SquareMatrix};
 
 use fltk::app::redraw;
@@ -61,12 +61,11 @@ use fltk::dialog::FileDialogType;
 use fltk::menu::MenuButton;
 #[allow(unused_imports)]
 use itertools::Itertools;
-use linestring::cgmath_2d::{convex_hull, Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
+use linestring::cgmath_2d::{Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::LineString3;
 use num::traits::FloatConst;
 use obj;
-use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
@@ -902,7 +901,7 @@ fn add_data_from_file(
 
     // transform each linestring to 2d
     let mut raw_data: Vec<LineStringSet2<F>> = lines
-        .iter()
+        .par_iter()
         .map(|x| x.transform(&transform).copy_to_2d(cgmath_3d::Plane::XY))
         .collect();
     {
@@ -913,9 +912,13 @@ fn add_data_from_file(
     }
 
     // calculate the hull of each shape
-    for i in 0..raw_data.len() {
-        raw_data[i].calculate_convex_hull();
-    }
+    let raw_data: Vec<LineStringSet2<F>> = raw_data
+        .into_par_iter()
+        .map(|mut x| {
+            x.calculate_convex_hull();
+            x
+        })
+        .collect();
 
     {
         let mut screen_aabb = Aabb2::new(&Point2::new(W as F, H as F));
@@ -926,43 +929,13 @@ fn add_data_from_file(
     #[cfg(feature = "console_debug")]
     println!("Started with {} shapes", raw_data.len());
 
-    // try to consolidate shapes. If one AABB and convex hull (a) totally engulfs another shape (b)
-    // we put shape (b) inside (a)
-    'outer_loop: loop {
-        // redo *every* test until nothing else can be done
-        for i in 0..raw_data.len() {
-            for j in i + 1..raw_data.len() {
-                if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb())
-                    && convex_hull::ConvexHull::contains(
-                        &raw_data[i].get_convex_hull().as_ref().unwrap(),
-                        &raw_data[j].get_convex_hull().as_ref().unwrap(),
-                    )
-                {
-                    // move stuff from j to i via a temp because of borrow checker
-                    let mut stolen_line_j =
-                        LineStringSet2::steal_from(raw_data.get_mut(j).unwrap());
-                    let line_i = raw_data.get_mut(i).unwrap();
-                    line_i.take_from_internal(&mut stolen_line_j)?;
-                    let _ = raw_data.remove(j);
-                    continue 'outer_loop;
-                } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb()) {
-                    // move stuff from i to j via a temp because of borrow checker
-                    let mut stolen_line_i =
-                        LineStringSet2::steal_from(raw_data.get_mut(i).unwrap());
-                    let line_j = raw_data.get_mut(j).unwrap();
-                    line_j.take_from_internal(&mut stolen_line_i)?;
-                    let _ = raw_data.remove(i);
-                    continue 'outer_loop;
-                }
-            }
-        }
-        break 'outer_loop;
-    }
+    let raw_data = centerline::consolidate_shapes(raw_data)?;
+
     #[cfg(feature = "console_debug")]
     println!("Reduced to {} shapes", raw_data.len());
     shared_data_bm.shapes = Some(
         raw_data
-            .into_iter()
+            .into_par_iter()
             .map(|x| Shape {
                 raw_data: x,
                 centerline: None,
