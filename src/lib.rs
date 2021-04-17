@@ -313,7 +313,7 @@ where
         .map(|rvi| -> Result<LineStringSet3<T>, CenterlineError> {
             if rvi.is_empty() {
                 return Err(CenterlineError::InternalError(
-                    "rvi.is_empty() Todo:give better description".to_string(),
+                    "rvi.is_empty() Seems like the shape separation failed.".to_string(),
                 ));
             }
             let mut loops = 0;
@@ -335,8 +335,8 @@ where
 
                     //assert_eq!(newV.edges.len(),2);
                     next = *current_vertex.edges.iter().find(|x| **x != prev).ok_or(
-                        CenterlineError::InternalError(
-                            "Could not find next vertex. Todo:give better description".to_string(),
+                        CenterlineError::InvalidData(
+                            "Could not find next vertex. All lines must form loops".to_string(),
                         ),
                     )?;
                 } else {

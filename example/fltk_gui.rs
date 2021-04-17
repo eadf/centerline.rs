@@ -361,7 +361,7 @@ fn main() -> Result<(), CenterlineError> {
                         draw::set_line_style(LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark1);
                         let aabb: LineString2<F> = shape.raw_data.get_aabb().clone().into();
-                        for a_line in aabb.as_lines().iter() {
+                        for a_line in aabb.as_lines_iter() {
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
                                     a_line.start.x as F,
@@ -382,7 +382,7 @@ fn main() -> Result<(), CenterlineError> {
                         draw::set_line_style(LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark2);
                         if let Some(ref hull) = shape.raw_data.get_convex_hull() {
-                            for a_line in hull.as_lines().iter() {
+                            for a_line in hull.as_lines_iter() {
                                 draw_fn(
                                     data_bm.affine.transform_ab_a([
                                         a_line.start.x as F,
@@ -404,7 +404,7 @@ fn main() -> Result<(), CenterlineError> {
                         if let Some(shape_internals) = shape.raw_data.get_internals() {
                             draw::set_draw_color(Color::Green);
                             for hull in shape_internals.iter() {
-                                for a_line in hull.1.as_lines().iter() {
+                                for a_line in hull.1.as_lines_iter() {
                                     draw_fn(
                                         data_bm.affine.transform_ab_a([
                                             a_line.start.x as F,
@@ -441,7 +441,7 @@ fn main() -> Result<(), CenterlineError> {
                         //println!("an_arc start_point:{:?} end_point:{:?} cell_point:{:?} segment:{:?}", an_arc.start_point, an_arc.end_point, an_arc.cell_point, an_arc.segment);
                         //let lines = an_arc.discretise_2d(1000.0);
                         //println!("an_arc.len()={:?}", lines.points().len() );
-                        for a_line in a_linestring.as_lines().iter() {
+                        for a_line in a_linestring.as_lines_iter() {
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
                                     a_line.start.x as F,
@@ -832,7 +832,7 @@ fn recalculate_voronoi_input(
                     before,
                     s_lines.len()
                 );
-                for lineseq in s_lines.as_lines().iter() {
+                for lineseq in s_lines.as_lines_iter() {
                     centerline.segments.push(boostvoronoi::Line::new(
                         boostvoronoi::Point {
                             x: lineseq.start.x as i32,
@@ -847,7 +847,7 @@ fn recalculate_voronoi_input(
             } else {
                 #[cfg(feature = "console_debug")]
                 println!("no reduction");
-                for lineseq in lines.as_lines().iter() {
+                for lineseq in lines.as_lines_iter() {
                     centerline.segments.push(boostvoronoi::Line::new(
                         boostvoronoi::Point {
                             x: lineseq.start.x as i32,
