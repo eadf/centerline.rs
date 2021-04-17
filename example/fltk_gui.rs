@@ -50,12 +50,14 @@ use cgmath::{Matrix4, One};
 use cgmath::{Point2, SquareMatrix};
 
 use fltk::app::redraw;
+use fltk::enums::*;
 use fltk::group::Pack;
 use fltk::valuator::HorNiceSlider;
 use fltk::*;
-use fltk::{app, draw::*, frame::*};
+use fltk::{app, draw::*, frame::*, prelude::*};
 
 use cgmath;
+use fltk::app::MouseWheel;
 use fltk::button::RoundButton;
 use fltk::dialog::FileDialogType;
 use fltk::menu::MenuButton;
@@ -238,7 +240,7 @@ fn main() -> Result<(), CenterlineError> {
 
     let (sender, receiver) = app::channel::<GuiMessage>();
     sender.send(GuiMessage::SliderPreChanged(50.0));
-    slider_pre.set_callback2(move |s| {
+    slider_pre.set_callback(move |s| {
         let value = s.value() as f32 * 100.0;
         s.set_label(&format!(
             "   Input data simplification distance: {:.4}       ",
@@ -247,14 +249,14 @@ fn main() -> Result<(), CenterlineError> {
         sender.send(GuiMessage::SliderPreChanged(value));
     });
 
-    slider_dot.set_callback2(move |s| {
+    slider_dot.set_callback(move |s| {
         let value = s.value() * 90.0;
         s.set_label(&format!("   Angle: {:.4}°      ", value));
         let value = (f64::PI() * value / 180.0).cos();
         sender.send(GuiMessage::SliderDotChanged(value as F));
     });
 
-    slider_post.set_callback2(move |s| {
+    slider_post.set_callback(move |s| {
         let value = s.value() as f32 * 100.0;
         s.set_label(&format!(
             "   Centerline simplification distance: {:.4}       ",
@@ -306,7 +308,7 @@ fn main() -> Result<(), CenterlineError> {
     }
     let shared_data_c = Rc::clone(&shared_data_rc);
     // This is called whenever the window is drawn and redrawn (in the event loop)
-    wind.draw(move || {
+    wind.draw(move |_| {
         let draw_fn = |line: Result<[F; 4], _>, cross: bool| {
             if let Ok(line) = line {
                 let (x1, y1, x2, y2) = (
@@ -462,13 +464,17 @@ fn main() -> Result<(), CenterlineError> {
     let shared_data_c = Rc::clone(&shared_data_rc);
     let mut mouse_drag: Option<(i32, i32)> = None;
 
-    wind.handle(move |ev| match ev {
+    wind.handle(move |_, ev| match ev {
         fltk::enums::Event::MouseWheel => {
             let event = &app::event_coords();
             //println!("mouse wheel at x:{} y:{}", event.0, event.1);
 
             let mut shared_data_bm = shared_data_c.borrow_mut();
-            let event_dy = app::event_dy();
+            let event_dy = match app::event_dy() {
+                MouseWheel::Up => 3,
+                MouseWheel::Down => -3,
+                _ => 0,
+            };
             let reverse_middle = shared_data_bm
                 .affine
                 .transform_ba(&cgmath::Point2::from([event.0 as F, event.1 as F]));
