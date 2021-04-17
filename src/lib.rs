@@ -81,25 +81,33 @@ struct Vertices {
     shape: Option<usize>, // shape id
 }
 
-fn paint_vertex(vertices: &mut fnv::FnvHashMap<usize, Vertices>, vertex_id: usize, color: usize) {
+// todo: make this a proper loop, not recursive (or tail recursive if possible)
+fn paint_vertex(
+    vertices: &mut fnv::FnvHashMap<usize, Vertices>,
+    vertex_id: usize,
+    color: usize,
+) -> Result<(), CenterlineError> {
     let edges = if let Some(v) = vertices.get_mut(&vertex_id) {
         if v.shape.is_none() {
             v.shape = Some(color);
         } else {
-            return;
+            return Ok(());
         }
         v.edges.clone()
     } else {
         // vertex already culled as internal
-        return;
+        return Ok(());
     };
 
     for i in edges.iter() {
         if *i == vertex_id {
-            panic!();
+            return Err(CenterlineError::InternalError(
+                "Vertex id did not match".to_string(),
+            ));
         }
-        paint_vertex(vertices, *i, color);
+        paint_vertex(vertices, *i, color)?;
     }
+    Ok(())
 }
 
 #[allow(clippy::type_complexity)]
@@ -253,7 +261,7 @@ where
         }
         highest_shape_id = unique_shape_id_generator.next().unwrap();
         // found an un-painted vertex
-        paint_vertex(&mut vertices, vertex_id, highest_shape_id);
+        paint_vertex(&mut vertices, vertex_id, highest_shape_id)?;
     }
     let highest_shape_id = highest_shape_id;
     if highest_shape_id == usize::MAX {
@@ -334,9 +342,9 @@ where
                     als.push(points[current]);
 
                     //assert_eq!(newV.edges.len(),2);
-                    next = *current_vertex.edges.iter().find(|x| **x != prev).ok_or(
+                    next = *current_vertex.edges.iter().find(|x| **x != prev).ok_or_else(||
                         CenterlineError::InvalidData(
-                            "Could not find next vertex. All lines must form loops".to_string(),
+                            "Could not find next vertex. All lines must form unconnected loops".to_string(),
                         ),
                     )?;
                 } else {
@@ -350,7 +358,7 @@ where
                 loops += 1;
                 if loops > rvi.len() + 1 {
                     return Err(CenterlineError::InvalidData(
-                        "It seems like one (or more) of the line strings does not form a loop."
+                        "It seems like one (or more) of the line strings does not form an unconnected loop."
                             .to_string(),
                     ));
                 }
