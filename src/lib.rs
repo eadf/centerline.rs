@@ -76,36 +76,47 @@ bitflags! {
 
 #[derive(Debug)]
 struct Vertices {
-    id: usize,            // index into the point3 list
-    edges: Vec<usize>,    // list of edges this vertex is part of
-    shape: Option<usize>, // shape id
+    id: usize,                      // index into the point3 list
+    connected_vertices: Vec<usize>, // list of other vertices this vertex is connected to
+    shape: Option<usize>,           // shape id
 }
 
-// todo: make this a proper loop, not recursive (or tail recursive if possible)
-fn paint_vertex(
+/// paints every connected vertex with the
+fn paint_every_connected_vertex(
     vertices: &mut fnv::FnvHashMap<usize, Vertices>,
+    already_painted: &mut yabf::Yabf,
     vertex_id: usize,
     color: usize,
 ) -> Result<(), CenterlineError> {
-    let edges = if let Some(v) = vertices.get_mut(&vertex_id) {
-        if v.shape.is_none() {
-            v.shape = Some(color);
-        } else {
-            return Ok(());
-        }
-        v.edges.clone()
-    } else {
-        // vertex already culled as internal
-        return Ok(());
-    };
+    let mut queue = VecDeque::<usize>::new();
+    queue.push_back(vertex_id);
 
-    for i in edges.iter() {
-        if *i == vertex_id {
-            return Err(CenterlineError::InternalError(
-                "Vertex id did not match".to_string(),
-            ));
+    while !queue.is_empty() {
+        // unwrap is safe here, we just checked that there are item in the queue
+        let current_vertex = queue.pop_front().unwrap();
+        if already_painted.bit(current_vertex) {
+            continue;
         }
-        paint_vertex(vertices, *i, color)?;
+
+        if let Some(vertex_obj) = vertices.get_mut(&current_vertex) {
+            if vertex_obj.shape.is_none() {
+                vertex_obj.shape = Some(color);
+                already_painted.set_bit(current_vertex, true);
+            } else {
+                // already painted for some reason
+                continue;
+            }
+            for v in vertex_obj.connected_vertices.iter() {
+                if !already_painted.bit(*v) {
+                    queue.push_back(*v);
+                }
+            }
+        } else {
+            return Err(CenterlineError::InternalError(format!(
+                "Vertex with id:{} dissapeared",
+                current_vertex
+            )));
+        };
     }
     Ok(())
 }
@@ -221,78 +232,60 @@ where
     for e in edge_set.iter() {
         let id = e.0;
         let other = e.1;
-        if let Some(v) = vertices.get_mut(&id) {
-            v.edges.push(other);
-        } else {
-            let _ = vertices.insert(
-                id,
-                Vertices {
-                    id,
-                    edges: vec![other],
-                    shape: None,
-                },
-            );
-        }
+        vertices
+            .entry(id)
+            .or_insert_with_key(|key| Vertices {
+                id: *key,
+                connected_vertices: Vec::<usize>::new(),
+                shape: None,
+            })
+            .connected_vertices
+            .push(other);
+
         let id = e.1;
         let other = e.0;
-        if let Some(v) = vertices.get_mut(&id) {
-            v.edges.push(other);
-        } else {
-            let _ = vertices.insert(
-                id,
-                Vertices {
-                    id,
-                    edges: vec![other],
-                    shape: None,
-                },
-            );
-        }
+        vertices
+            .entry(id)
+            .or_insert_with_key(|key| Vertices {
+                id: *key,
+                connected_vertices: Vec::<usize>::new(),
+                shape: None,
+            })
+            .connected_vertices
+            .push(other);
     }
     //println!("Vertices: {:?}", vertices.iter().map(|x|x.1.id).collect::<Vec<usize>>());
     // Do a recursive search on one vertex, paint all connected vertices with the same number.
     let mut unique_shape_id_generator = 0..usize::MAX;
-    let vertex_ids: Vec<usize> = vertices.iter().map(|x| *x.0).collect();
-    let mut highest_shape_id: usize = usize::MAX;
-    for vertex_id in vertex_ids.into_iter() {
-        if let Some(v) = vertices.get(&vertex_id) {
-            if v.shape.is_some() {
-                continue;
-            }
+
+    let mut already_painted = yabf::Yabf::with_capacity(vertices.len());
+    for vertex_id in 0..vertices.len() {
+        if already_painted.bit(vertex_id) {
+            continue;
         }
-        highest_shape_id = unique_shape_id_generator.next().unwrap();
+
         // found an un-painted vertex
-        paint_vertex(&mut vertices, vertex_id, highest_shape_id)?;
+        paint_every_connected_vertex(
+            &mut vertices,
+            &mut already_painted,
+            vertex_id,
+            unique_shape_id_generator.next().unwrap(),
+        )?;
     }
-    let highest_shape_id = highest_shape_id;
-    if highest_shape_id == usize::MAX {
+    let highest_shape_id_plus_one = unique_shape_id_generator.next().unwrap();
+    if highest_shape_id_plus_one == 0 {
         return Err(CenterlineError::InternalError(
             "Could not find any shapes to separate".to_string(),
         ));
     }
 
-    /*for v in vertices.iter() {
-        if *v.0 != v.1.id {
-            println!("Id and key does not match key:{} id:{}", v.0, v.1.id);
-        }
-        if v.1.shape.is_none() {
-            println!(
-                "unpainted vertex: {} shape:{:?} edges:{:?}",
-                v.1.id, v.1.shape, v.1.edges
-            );
-            //panic!();
-        }
-    }*/
-
-    //println!("Vertices: {:?}", vertices.iter().map(|x|x.1.id).collect::<Vec<usize>>());
-    //println!("Color: {:?}", vertices.iter().map(|x|x.1.shape).collect::<Vec<Option<usize>>>());
     // Spit all detected connected vertices into separate sets.
     // i.e. every vertex with the same color goes into the same set.
-    //println!("vertices:{:?}", vertices);
     let mut shape_separation = Vec::<fnv::FnvHashMap<usize, Vertices>>::new();
-    for current_shape in 0..=highest_shape_id {
+    for current_shape in 0..highest_shape_id_plus_one {
         if vertices.is_empty() {
             println!("vertices:{:?}", vertices);
-            println!("current_shape:{}", highest_shape_id);
+            println!("current_shape:{}", current_shape);
             println!("shape_separation:{:?}", shape_separation);
 
             return Err(CenterlineError::InternalError(
@@ -342,7 +335,7 @@ where
                     als.push(points[current]);
 
                     //assert_eq!(newV.edges.len(),2);
-                    next = *current_vertex.edges.iter().find(|x| **x != prev).ok_or_else(||
+                    next = *current_vertex.connected_vertices.iter().find(|x| **x != prev).ok_or_else(||
                         CenterlineError::InvalidData(
                             "Could not find next vertex. All lines must form unconnected loops".to_string(),
                         ),
