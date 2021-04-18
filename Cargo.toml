@@ -40,7 +40,7 @@ name = "cli"
 path = "example/cli.rs"
 
 [dev-dependencies]
-fltk = "^1.0.0"
+fltk = "^1.0.1"
 itertools = "^0.10.0"
 criterion = "^0.3.4"
 
