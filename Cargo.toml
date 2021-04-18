@@ -1,13 +1,13 @@
 [package]
 name = "centerline"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["eadf"]
 edition = "2018"
 description = "Simple library for finding centerlines of 2D closed geometry"
 readme = "README.md"
 repository = "https://github.com/eadf/centerline.rs"
 license = "AGPL-3.0"
-keywords = ["centerline", "geometry", "data-structures", "mathematics"]
+keywords = ["centerline", "geometry"]
 
 [dependencies]
 num = "^0.4.0"

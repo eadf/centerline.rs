@@ -2,13 +2,15 @@
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.1.0/status.svg)](https://deps.rs/crate/centerline/0.1.0)
+[![dependency status](https://deps.rs/crate/centerline/0.2.0/status.svg)](https://deps.rs/crate/centerline/0.1.0)
 
 # Centerline
 
 ![centerline](centerline.gif)
 
-Finds 'a' centerline of closed 2D geometries.
+Finds centerlines of closed 2D geometries. It is focused on letter like shapes, i.e. vertex loops with potential enclosed islands of loops.
+Loops directly connected to other loops does not work at the moment. 
+
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 
 'spiky' bits (green) by comparing the angle between the edge (green), and the input geometry (red) that created it.
 If the angle is close to 90°, it will be ignored. Note that the result (blue) technically is not a true centerline after the spikes has been filtered out, but it 
