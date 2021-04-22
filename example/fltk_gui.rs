@@ -164,7 +164,7 @@ fn main() -> Result<(), CenterlineError> {
     let mut slider_pre = HorNiceSlider::default()
         .with_size(100, 25)
         .with_label("Input data simplification distance");
-    slider_pre.set_value(1.0);
+    slider_pre.set_value(0.5);
     slider_pre.set_frame(FrameType::PlasticUpBox);
     slider_pre.set_color(Color::White);
 
@@ -178,7 +178,7 @@ fn main() -> Result<(), CenterlineError> {
     let mut slider_post = HorNiceSlider::default()
         .with_size(100, 25)
         .with_label("Centerline data simplification distance");
-    slider_post.set_value(1.0);
+    slider_post.set_value(0.5);
     slider_post.set_frame(FrameType::PlasticUpBox);
     slider_post.set_color(Color::White);
 
@@ -568,7 +568,11 @@ fn main() -> Result<(), CenterlineError> {
                         if let Err(err) =
                             add_data_from_file(shared_data_c, filename.to_str().unwrap())
                         {
-                            println!("Failed to read file: {:?}", err);
+                            println!("Failed to read file {:?}: {:?}", filename, err);
+                        }
+                        if let Some(filename) = filename.to_str() {
+                            let w = &mut wind;
+                            w.set_label(filename);
                         }
                     }
                 }
@@ -888,7 +892,6 @@ fn add_data_from_file(
 
     let lines = centerline::remove_internal_edges(obj_set)?;
     let lines = centerline::divide_into_shapes(lines.0, lines.1)?;
-
     let mut total_aabb = cgmath_3d::Aabb3::<f32>::default();
     for l in lines.iter() {
         total_aabb.update_aabb(l.get_aabb());
