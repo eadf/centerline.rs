@@ -4,7 +4,6 @@
 #![deny(unused_qualifications)]
 #![deny(unused_results)]
 #![deny(unused_imports)]
-#![deny(unused_imports)]
 #![feature(hash_drain_filter)]
 
 use boostvoronoi::builder as VB;
@@ -255,7 +254,7 @@ where
             .push(other);
     }
     //println!("Vertices: {:?}", vertices.iter().map(|x|x.1.id).collect::<Vec<usize>>());
-    // Do a recursive search on one vertex, paint all connected vertices with the same number.
+    // Do a search on one vertex, paint all connected vertices with the same number.
     let mut unique_shape_id_generator = 0..usize::MAX;
 
     let mut already_painted = yabf::Yabf::with_capacity(vertices.len());
@@ -550,16 +549,21 @@ pub fn consolidate_shapes<F>(
 where
     F: cgmath::BaseFloat + Sync,
 {
+    //for shape in raw_data.iter().enumerate() {
+    //    println!("Shape #{} aabb:{:?}", shape.0, shape.1.get_aabb());
+    //}
     'outer_loop: loop {
         // redo *every* test until nothing else can be done
         for i in 0..raw_data.len() {
             for j in i + 1..raw_data.len() {
+                //println!("testing #{} vs #{}", i, j);
                 if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb())
                     && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
                         &raw_data[i].get_convex_hull().as_ref().unwrap(),
                         &raw_data[j].get_convex_hull().as_ref().unwrap(),
                     )
                 {
+                    //println!("#{} contains #{}", i, j);
                     // move stuff from j to i via a temp because of borrow checker
                     let mut stolen_line_j = linestring::cgmath_2d::LineStringSet2::steal_from(
                         raw_data.get_mut(j).unwrap(),
@@ -568,7 +572,12 @@ where
                     line_i.take_from_internal(&mut stolen_line_j)?;
                     let _ = raw_data.remove(j);
                     continue 'outer_loop;
-                } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb()) {
+                } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb())
+                    && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
+                    &raw_data[j].get_convex_hull().as_ref().unwrap(),
+                    &raw_data[i].get_convex_hull().as_ref().unwrap(),
+                ) {
+                    //println!("#{} contains #{}", j, i);
                     // move stuff from i to j via a temp because of borrow checker
                     let mut stolen_line_i = linestring::cgmath_2d::LineStringSet2::steal_from(
                         raw_data.get_mut(i).unwrap(),
@@ -750,10 +759,7 @@ where
                 rejected_edges.set_bit(twin_id.0, true);
             }
             if !self.diagram.edge_is_finite(edge_id)? {
-                self.recursively_mark_connected_edges(edge_id, &mut rejected_edges, false)?;
-
-                //self.diagram
-                //    .edge_or_color(edge_id, ColorFlag::INFINITE.bits);
+                self.mark_connected_edges(edge_id, &mut rejected_edges, true)?;
                 rejected_edges.set_bit(edge_id.0, true);
             }
         }
@@ -889,10 +895,11 @@ where
         Ok(false)
     }
 
-    /// Recursively marks this edge and all other edges connecting to it via vertex1.
-    /// Recursion stops when connecting to input geometry.
-    /// if 'initial' is set to true it will search both ways, (edge and the twin edge)
-    fn recursively_mark_connected_edges(
+    /// Marks this edge and all other edges connecting to it via vertex1.
+    /// Line iteration stops when connecting to input geometry.
+    /// if 'initial' is set to true it will search both ways, edge and the twin edge, but only
+    /// for the first edge.
+    fn mark_connected_edges(
         &self,
         edge_id: VD::VoronoiEdgeIndex,
         marked_edges: &mut yabf::Yabf,
@@ -902,45 +909,62 @@ where
             return Ok(());
         }
 
-        let v1 = self.diagram.edge_get_vertex1(edge_id)?;
-        if self.diagram.edge_get_vertex0(edge_id)?.is_some() && v1.is_none() {
-            // this edge leads to nowhere, break recursion
-            marked_edges.set_bit(edge_id.0, true);
-            return Ok(());
-        }
-        marked_edges.set_bit(edge_id.0, true);
+        let mut initial = initial;
+        let mut queue = VecDeque::<VD::VoronoiEdgeIndex>::new();
+        queue.push_back(edge_id);
 
-        if initial {
-            self.recursively_mark_connected_edges(
-                self.diagram.edge_get_twin_err(edge_id)?,
-                marked_edges,
-                false,
-            )?;
-        } else {
-            marked_edges.set_bit(self.diagram.edge_get_twin_err(edge_id)?.0, true);
-        }
-
-        if v1.is_none() || !self.diagram.edge_get(edge_id)?.is_primary() {
-            // break recursion if vertex1 is not found or if the edge is not primary
-            return Ok(());
-        }
-        // v1 is always Some from this point on
-        if let Some(v1) = v1 {
-            let v1 = self.diagram.vertex_get(v1)?;
-            if v1.is_site_point() {
-                // break recursion on site points
-                return Ok(());
+        'outer: while !queue.is_empty() {
+            // unwrap is safe since we just checked !queue.is_empty()
+            let edge_id = queue.pop_front().unwrap();
+            if marked_edges.bit(edge_id.0) {
+                initial = false;
+                continue 'outer;
             }
-            //self.reject_vertex(v1, color);
-            let mut e = v1.get_incident_edge();
-            let v_incident_edge = e;
-            while let Some(this_edge) = e {
-                self.recursively_mark_connected_edges(this_edge, marked_edges, false)?;
-                e = self.diagram.edge_rot_next(this_edge)?;
-                if e == v_incident_edge {
-                    break;
+
+            let v1 = self.diagram.edge_get_vertex1(edge_id)?;
+            if self.diagram.edge_get_vertex0(edge_id)?.is_some() && v1.is_none() {
+                // this edge leads to nowhere, stop following line
+                marked_edges.set_bit(edge_id.0, true);
+                initial = false;
+                continue 'outer;
+            }
+            marked_edges.set_bit(edge_id.0, true);
+
+            #[allow(unused_assignments)]
+            if initial {
+                initial = false;
+                queue.push_back(self.diagram.edge_get_twin_err(edge_id)?);
+            } else {
+                marked_edges.set_bit(self.diagram.edge_get_twin_err(edge_id)?.0, true);
+            }
+
+            if v1.is_none() || !self.diagram.edge_get(edge_id)?.is_primary() {
+                // stop traversing this line if vertex1 is not found or if the edge is not primary
+                initial = false;
+                continue 'outer;
+            }
+            // v1 is always Some from this point on
+            if let Some(v1) = v1 {
+                let v1 = self.diagram.vertex_get(v1)?;
+                if v1.is_site_point() {
+                    // break line iteration on site points
+                    initial = false;
+                    continue 'outer;
+                }
+                //self.reject_vertex(v1, color);
+                let mut e = v1.get_incident_edge();
+                let v_incident_edge = e;
+                while let Some(this_edge) = e {
+                    if !marked_edges.bit(this_edge.0) {
+                        queue.push_back(this_edge);
+                    }
+                    e = self.diagram.edge_rot_next(this_edge)?;
+                    if e == v_incident_edge {
+                        break;
+                    }
                 }
             }
+            initial = false;
         }
         Ok(())
     }
@@ -1023,11 +1047,7 @@ where
                     continue;
                 }
                 let mut edges = yabf::Yabf::with_capacity(self.diagram.edges.len());
-                self.recursively_mark_connected_edges(
-                    VD::VoronoiEdgeIndex(it.0),
-                    &mut edges,
-                    true,
-                )?;
+                self.mark_connected_edges(VD::VoronoiEdgeIndex(it.0), &mut edges, true)?;
                 searched_edges_s |= &edges;
                 searched_edges_v.push(edges);
             }
@@ -1150,6 +1170,7 @@ where
         println!();
         #[cfg(feature = "console_debug")]
         println!("->traverse_edge({})", seed_edge.0);
+
         #[cfg(feature = "console_debug")]
         let mut mockup = Vec::<Vec<VD::VoronoiEdgeIndex>>::default();
 
