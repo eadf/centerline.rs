@@ -9,6 +9,11 @@ repository = "https://github.com/eadf/centerline.rs"
 license = "AGPL-3.0"
 keywords = ["centerline", "geometry"]
 
+[features]
+console_debug = []
+impl-wavefront = ["obj-rs"]
+default = []
+
 [dependencies]
 num = "^0.4.0"
 fnv = "^1.0.7"
@@ -20,20 +25,21 @@ yabf = {version="^0.1.0",default-features=false}
 boostvoronoi = "^0.8.1"
 #boostvoronoi = {path = "../boostvoronoi.rs"}
 #boostvoronoi = { git = "https://github.com/eadf/boostvoronoi.rs" }
-linestring = {version="^0.2.0",default-features=false,features=["impl-cgmath", "impl-rayon"]}
+linestring = {version="^0.3.0",default-features=false,features=["impl-cgmath", "impl-rayon"]}
 #linestring = {path = "../linestring.rs",default-features=false,features=["impl-cgmath", "impl-rayon"]}
 #linestring = { git = "https://github.com/eadf/linestring.rs",default-features=false,features=["impl-cgmath","impl-rayon"]}
 cgmath = "^0.18.0"
 approx = "^0.4.0"
-obj-rs = "^0.6.2"
 thiserror = "^1.0.24"
 rayon = "^1.5.0"
 bitflags = "^1.2.1"
 ordered-float = "^2.1.1"
+obj-rs = { version = "^0.6.2", optional = true }
 
 [[example]]
 name = "fltk_gui"
 path = "example/fltk_gui.rs"
+required-features = ["impl-wavefront"]
 
 [[example]]
 name = "cli"
@@ -43,9 +49,6 @@ path = "example/cli.rs"
 fltk = "^1.0.1"
 itertools = "^0.10.0"
 criterion = "^0.3.4"
-
-[features]
-console_debug = []
 
 [[bench]]
 name = "bench"

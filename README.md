@@ -36,7 +36,7 @@ println!(
 ## Gui example
 
 ```fish
-cargo +nightly run --example fltk_gui
+cargo +nightly run --example fltk_gui --features="impl-wavefront"
 ```
 The example only displays 2D, but the generated center-line is actually 3D line segments.\
 The Z coordinate is the distance between the 2D center-line, and the geometry that created it. 

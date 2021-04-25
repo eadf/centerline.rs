@@ -5,17 +5,17 @@
 #![deny(unused_results)]
 #![deny(unused_imports)]
 #![feature(hash_drain_filter)]
+// from linestring
+#![feature(map_first_last)]
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;
 use boostvoronoi::sync_diagram as VSD;
 use boostvoronoi::{InputType, OutputType};
-
 use cgmath::InnerSpace;
 use cgmath::SquareMatrix;
 use cgmath::Transform;
 use linestring::cgmath_2d;
-#[allow(unused_imports)]
 use linestring::cgmath_2d::convex_hull;
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
@@ -23,6 +23,7 @@ use ordered_float::OrderedFloat;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use std::collections::VecDeque;
+use std::line;
 use std::ops::Neg;
 use thiserror::Error;
 
@@ -49,8 +50,8 @@ pub enum CenterlineError {
     #[error(transparent)]
     BvError(#[from] boostvoronoi::BvError),
 
-    #[error(transparent)]
-    ObjError(#[from] obj::ObjError),
+    #[error("Error from .obj file handling")]
+    ObjError(String),
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
@@ -112,16 +113,19 @@ fn paint_every_connected_vertex(
             }
         } else {
             return Err(CenterlineError::InternalError(format!(
-                "Vertex with id:{} dissapeared",
-                current_vertex
+                "Vertex with id:{} dissapeared. {}",
+                current_vertex,
+                line!()
             )));
         };
     }
     Ok(())
 }
 
+#[cfg(feature = "impl-wavefront")]
 #[allow(clippy::type_complexity)]
-/// remove internal edges from a wavefront-obj object
+/// Remove internal edges from a wavefront-obj object
+/// This requires the feature "impl-wavefront" to be active.
 pub fn remove_internal_edges(
     obj: obj::raw::RawObj,
 ) -> Result<(fnv::FnvHashSet<(usize, usize)>, Vec<cgmath::Point3<f32>>), CenterlineError> {
@@ -273,9 +277,10 @@ where
     }
     let highest_shape_id_plus_one = unique_shape_id_generator.next().unwrap();
     if highest_shape_id_plus_one == 0 {
-        return Err(CenterlineError::InternalError(
-            "Could not find any shapes to separate".to_string(),
-        ));
+        return Err(CenterlineError::InternalError(format!(
+            "Could not find any shapes to separate. {}",
+            line!()
+        )));
     }
 
     // Spit all detected connected vertices into separate sets.
@@ -287,9 +292,10 @@ where
             println!("current_shape:{}", current_shape);
             println!("shape_separation:{:?}", shape_separation);
 
-            return Err(CenterlineError::InternalError(
-                "Could not separate all shapes, ran out of vertices.".to_string(),
-            ));
+            return Err(CenterlineError::InternalError(format!(
+                "Could not separate all shapes, ran out of vertices. {}",
+                line!()
+            )));
         }
         let drained = vertices
             .drain_filter(|_, x| {
@@ -313,7 +319,7 @@ where
         .map(|rvi| -> Result<LineStringSet3<T>, CenterlineError> {
             if rvi.is_empty() {
                 return Err(CenterlineError::InternalError(
-                    "rvi.is_empty() Seems like the shape separation failed.".to_string(),
+                    format!("rvi.is_empty() Seems like the shape separation failed. {}", line!()),
                 ));
             }
             let mut loops = 0;
@@ -561,6 +567,8 @@ where
                     && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
                         &raw_data[i].get_convex_hull().as_ref().unwrap(),
                         &raw_data[j].get_convex_hull().as_ref().unwrap(),
+                        F::default_epsilon() * F::from(2.0).unwrap(),
+                        F::default_max_ulps() * 2,
                     )
                 {
                     //println!("#{} contains #{}", i, j);
@@ -574,9 +582,12 @@ where
                     continue 'outer_loop;
                 } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb())
                     && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
-                    &raw_data[j].get_convex_hull().as_ref().unwrap(),
-                    &raw_data[i].get_convex_hull().as_ref().unwrap(),
-                ) {
+                        &raw_data[j].get_convex_hull().as_ref().unwrap(),
+                        &raw_data[i].get_convex_hull().as_ref().unwrap(),
+                        F::default_epsilon() * F::from(2.0).unwrap(),
+                        F::default_max_ulps() * 2,
+                    )
+                {
                     //println!("#{} contains #{}", j, i);
                     // move stuff from i to j via a temp because of borrow checker
                     let mut stolen_line_i = linestring::cgmath_2d::LineStringSet2::steal_from(
@@ -692,6 +703,34 @@ where
         >,
     ) -> Result<(), CenterlineError> {
         self.normalized_dot_test(dot_limit)?;
+        if let Some(ignored_regions) = ignored_regions {
+            self.traverse_edges(discrete_limit, ignored_regions)?;
+        } else {
+            let ignored_regions = Vec::<(
+                linestring::cgmath_2d::Aabb2<F1>,
+                linestring::cgmath_2d::LineString2<F1>,
+            )>::with_capacity(0);
+            self.traverse_edges(discrete_limit, &ignored_regions)?;
+        }
+        Ok(())
+    }
+
+    /// Collects lines and linestrings from the centerline.
+    /// This version of calculate_centerline() tries to keep as many edges as possible.
+    /// The intention is to use the data for mesh generation.
+    /// TODO: make this return a true mesh
+    pub fn calculate_centerline_mesh(
+        &mut self,
+        discrete_limit: F1,
+        ignored_regions: Option<
+            &Vec<(
+                linestring::cgmath_2d::Aabb2<F1>,
+                linestring::cgmath_2d::LineString2<F1>,
+            )>,
+        >,
+    ) -> Result<(), CenterlineError> {
+        self.ignored_edges = self.rejected_edges.clone();
+
         if let Some(ignored_regions) = ignored_regions {
             self.traverse_edges(discrete_limit, ignored_regions)?;
         } else {
@@ -1026,10 +1065,23 @@ where
         )],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
-        let mut lines = self.lines.take().unwrap();
-        let mut linestrings = self.line_strings.take().unwrap();
+        let mut lines = self.lines.take().ok_or_else(|| {
+            CenterlineError::InternalError(format!(
+                "traverse_edges(): could not take lines. {}",
+                line!()
+            ))
+        })?;
+        let mut linestrings = self.line_strings.take().ok_or_else(|| {
+            CenterlineError::InternalError(format!(
+                "traverse_edges(): could not take linestrings. {}",
+                line!()
+            ))
+        })?;
 
-        let mut ignored_edges = self.ignored_edges.take().unwrap();
+        let mut ignored_edges = self
+            .ignored_edges
+            .take()
+            .unwrap_or_else(|| yabf::Yabf::with_capacity(0));
 
         #[cfg(feature = "console_debug")]
         let mut edge_lines = fnv::FnvHashMap::<usize, [F1; 4]>::default();
@@ -1194,8 +1246,9 @@ where
                 if ignored_edges.bit(edge.0) {
                     // Should never happen
                     return Err(CenterlineError::InternalError(format!(
-                        "should never happen: edge {} already in ignore list.",
-                        edge.0
+                        "should never happen: edge {} already in ignore list. {}",
+                        edge.0,
+                        line!()
                     )));
                 }
                 if used_edges.bit(edge.0) {
@@ -1377,21 +1430,25 @@ where
                 let mut ls = LineString3::<F1>::default();
                 for edge_id in edges.iter() {
                     let edge = self.diagram.edge_get(*edge_id)?;
-                    match self.convert_edge_to_shape(&edge) {
-                        Ok(cgmath_3d::Shape3d::Line(l)) => {
+                    match self.convert_edge_to_shape(&edge)? {
+                        cgmath_3d::Shape3d::Line(l) => {
                             //println!("->got {:?}", l);
                             ls.push(l.start);
                             ls.push(l.end);
                             //println!("<-got");
                         }
-                        Ok(cgmath_3d::Shape3d::ParabolicArc(a)) => {
+                        cgmath_3d::Shape3d::ParabolicArc(a) => {
                             //println!("->got {:?}", a);
                             ls.append(a.discretise_3d(maxdist));
                             //println!("<-got");
                         }
                         // should not happen
-                        Ok(cgmath_3d::Shape3d::Linestring(_s)) => panic!(),
-                        Err(_) => panic!(),
+                        cgmath_3d::Shape3d::Linestring(_s) => {
+                            return Err(CenterlineError::InternalError(format!(
+                                "convert_edges_to_lines() got an unexpected linestring. {}",
+                                line!()
+                            )))
+                        }
                     }
                 }
                 linestrings.push(ls);
@@ -1409,9 +1466,13 @@ where
         let edge_twin_id = self.diagram.edge_get_twin_err(edge_id)?;
 
         // Edge is finite so we know that vertex0 and vertex1 is_some()
-        let vertex0 = self.diagram.vertex_get(edge.vertex0().unwrap())?;
+        let vertex0 = self.diagram.vertex_get(edge.vertex0().ok_or_else(|| {
+            CenterlineError::InternalError(format!("Could not find vertex 1. {}", line!()))
+        })?)?;
 
-        let vertex1 = self.diagram.edge_get_vertex1(edge_id)?.unwrap();
+        let vertex1 = self.diagram.edge_get_vertex1(edge_id)?.ok_or_else(|| {
+            CenterlineError::InternalError(format!("Could not find vertex 1. {}", line!()))
+        })?;
         let vertex1 = self.diagram.vertex_get(vertex1)?;
 
         #[cfg(feature = "console_debug")]

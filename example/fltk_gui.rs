@@ -67,12 +67,14 @@ use linestring::cgmath_2d::{Aabb2, Line2, LineString2, LineStringSet2, SimpleAff
 use linestring::cgmath_3d;
 use linestring::cgmath_3d::LineString3;
 use num::traits::FloatConst;
-use obj;
 use rayon::prelude::*;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
+
+// this requires the "impl-wavefront" feature to be active
+use obj;
 
 #[macro_use]
 extern crate bitflags;
@@ -887,7 +889,7 @@ fn add_data_from_file(
 
     let obj_set = {
         let input = BufReader::new(File::open(filename).unwrap());
-        obj::raw::parse_obj(input)?
+        obj::raw::parse_obj(input).or_else(|x| Err(CenterlineError::ObjError(x.to_string())))?
     };
 
     let lines = centerline::remove_internal_edges(obj_set)?;
