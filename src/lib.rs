@@ -693,7 +693,7 @@ where
     /// Collect the rest of the edges into connected line-strings and line segments.
     pub fn calculate_centerline(
         &mut self,
-        dot_limit: F1,
+        cos_angle: F1,
         discrete_limit: F1,
         ignored_regions: Option<
             &Vec<(
@@ -702,7 +702,7 @@ where
             )>,
         >,
     ) -> Result<(), CenterlineError> {
-        self.normalized_dot_test(dot_limit)?;
+        self.angle_test(cos_angle)?;
         if let Some(ignored_regions) = ignored_regions {
             self.traverse_edges(discrete_limit, ignored_regions)?;
         } else {
@@ -807,7 +807,7 @@ where
         Ok(())
     }
 
-    /// Reject edges that does not pass the dot limit test.
+    /// Reject edges that does not pass the angle test.
     /// It iterates over all cells, looking for vertices that are identical to the
     /// input segment endpoints.
     /// It then look at edges connected to that vertex and test if the dot product
@@ -815,7 +815,7 @@ where
     /// a predefined value.
     /// TODO: there must be a quicker way to get this information from the voronoi diagram
     /// maybe mark each vertex identical to input points..
-    fn normalized_dot_test(&mut self, dot_limit: F1) -> Result<(), CenterlineError> {
+    fn angle_test(&mut self, cos_angle: F1) -> Result<(), CenterlineError> {
         let mut ignored_edges = self.rejected_edges.clone().take().unwrap();
 
         for cell in self.diagram.cells().iter() {
@@ -860,32 +860,32 @@ where
                                         x: vertex1.x(),
                                         y: vertex1.y(),
                                     };
-                                    let _ = self.normalized_dot_test_6(
-                                        dot_limit,
+                                    let _ = self.angle_test_6(
+                                        cos_angle,
                                         &mut ignored_edges,
                                         e,
                                         &vertex0,
                                         &vertex1,
                                         &point0,
                                         &point1,
-                                    )? || self.normalized_dot_test_6(
-                                        dot_limit,
+                                    )? || self.angle_test_6(
+                                        cos_angle,
                                         &mut ignored_edges,
                                         e,
                                         &vertex0,
                                         &vertex1,
                                         &point1,
                                         &point0,
-                                    )? || self.normalized_dot_test_6(
-                                        dot_limit,
+                                    )? || self.angle_test_6(
+                                        cos_angle,
                                         &mut ignored_edges,
                                         e,
                                         &vertex1,
                                         &vertex0,
                                         &point0,
                                         &point1,
-                                    )? || self.normalized_dot_test_6(
-                                        dot_limit,
+                                    )? || self.angle_test_6(
+                                        cos_angle,
                                         &mut ignored_edges,
                                         e,
                                         &vertex1,
@@ -907,11 +907,11 @@ where
         Ok(())
     }
 
-    /// set the edge as rejected if it fails the dot test
+    /// set the edge as rejected if it fails the dot product test
     #[allow(clippy::too_many_arguments)]
-    fn normalized_dot_test_6(
+    fn angle_test_6(
         &self,
-        dot_limit: F1,
+        cos_angle: F1,
         ignored_edges: &mut yabf::Yabf,
         edge_id: VD::VoronoiEdgeIndex,
         vertex0: &cgmath::Point2<F1>,
@@ -923,7 +923,7 @@ where
             // todo better to compare to the square of the dot product, fewer operations.
             let segment_v = (s_point_1 - s_point_0).normalize();
             let vertex_v = (vertex1 - vertex0).normalize();
-            if segment_v.dot(vertex_v).abs() < dot_limit {
+            if segment_v.dot(vertex_v).abs() < cos_angle {
                 if let Some(twin) = self.diagram.edge_get(edge_id)?.twin() {
                     ignored_edges.set_bit(twin.0, true);
                 }

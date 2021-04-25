@@ -2,11 +2,11 @@
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.2.0/status.svg)](https://deps.rs/crate/centerline/0.1.0)
+[![dependency status](https://deps.rs/crate/centerline/0.3.0/status.svg)](https://deps.rs/crate/centerline/0.3.0)
 
 # Centerline
 
-![centerline](centerline.gif)
+![centerline](img/centerline.gif)
 
 Finds centerlines of closed 2D geometries. It is focused on letter like shapes, i.e. vertex loops with potential enclosed islands of loops.
 Loops directly connected to other loops does not work at the moment. 
@@ -16,16 +16,18 @@ It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as 
 If the angle is close to 90°, it will be ignored. Note that the result (blue) technically is not a true centerline after the spikes has been filtered out, but it 
 makes for much cleaner tool-paths etc. It also performs a line simplification on the resulting center-line. 
 
-![unfiltered](unfiltered.png) ![filtered](filtered.png)
+![unfiltered](img/unfiltered.png) ![filtered](img/filtered.png)
 
 ```rust
 let segments = ...same as boost voronoi segments...
 let mut centerline = Centerline::<i32, f32, i64, f64>::with_segments(segments);
 centerline.build_voronoi()?;
-let normalized_dot_product_limit:f32 = 0.38;
+// the cosine value of the angle limit. 
+let cos_angle:f32 = 0.38;
+// the RDP simplification distance
 let centerline_simplification:f32 = 0.1;
 
-let _= centerline.calculate_centerline(normalized_dot_product_limit, centerline_simplification)?;
+let _= centerline.calculate_centerline(cos_angle, centerline_simplification, None)?;
 println!(
    "Result: lines:{}, line_strings:{}",
    centerline.lines.as_ref().map_or(0,|x|x.len()),
