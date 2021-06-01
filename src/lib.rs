@@ -83,7 +83,7 @@ struct Vertices {
 
 /// paints every connected vertex with the
 fn paint_every_connected_vertex(
-    vertices: &mut fnv::FnvHashMap<usize, Vertices>,
+    vertices: &mut ahash::AHashMap<usize, Vertices>,
     already_painted: &mut yabf::Yabf,
     vertex_id: usize,
     color: usize,
@@ -128,13 +128,13 @@ fn paint_every_connected_vertex(
 /// This requires the feature "impl-wavefront" to be active.
 pub fn remove_internal_edges(
     obj: obj::raw::RawObj,
-) -> Result<(fnv::FnvHashSet<(usize, usize)>, Vec<cgmath::Point3<f32>>), CenterlineError> {
+) -> Result<(ahash::AHashSet<(usize, usize)>, Vec<cgmath::Point3<f32>>), CenterlineError> {
     for p in obj.points.iter() {
         // Ignore all points
         println!("Ignored point:{:?}", p);
     }
-    let mut all_edges = fnv::FnvHashSet::<(usize, usize)>::default();
-    let mut internal_edges = fnv::FnvHashSet::<(usize, usize)>::default();
+    let mut all_edges = ahash::AHashSet::<(usize, usize)>::default();
+    let mut internal_edges = ahash::AHashSet::<(usize, usize)>::default();
 
     for i in 0..obj.lines.len() {
         // keep all lines
@@ -222,7 +222,7 @@ pub fn remove_internal_edges(
 
 /// Group input edges into connected shapes
 pub fn divide_into_shapes<T>(
-    edge_set: fnv::FnvHashSet<(usize, usize)>,
+    edge_set: ahash::AHashSet<(usize, usize)>,
     points: Vec<cgmath::Point3<T>>,
 ) -> Result<Vec<LineStringSet3<T>>, CenterlineError>
 where
@@ -231,7 +231,7 @@ where
     //println!("All edges: {:?}", all_edges);
     // put all edges into a hashmap of Vertices, this will make it possible to
     // arrange them in the order they are connected
-    let mut vertices = fnv::FnvHashMap::<usize, Vertices>::default();
+    let mut vertices = ahash::AHashMap::<usize, Vertices>::default();
     for e in edge_set.iter() {
         let id = e.0;
         let other = e.1;
@@ -285,7 +285,7 @@ where
 
     // Spit all detected connected vertices into separate sets.
     // i.e. every vertex with the same color goes into the same set.
-    let mut shape_separation = Vec::<fnv::FnvHashMap<usize, Vertices>>::new();
+    let mut shape_separation = Vec::<ahash::AHashMap<usize, Vertices>>::new();
     for current_shape in 0..highest_shape_id_plus_one {
         if vertices.is_empty() {
             println!("vertices:{:?}", vertices);
@@ -630,7 +630,7 @@ where
     ignored_edges: Option<yabf::Yabf>,
 
     #[cfg(feature = "console_debug")]
-    pub debug_edges: Option<fnv::FnvHashMap<usize, [F1; 4]>>,
+    pub debug_edges: Option<ahash::AHashMap<usize, [F1; 4]>>,
 }
 
 impl<I1, F1> Centerline<I1, F1>
@@ -732,13 +732,13 @@ where
         self.ignored_edges = self.rejected_edges.clone();
 
         if let Some(ignored_regions) = ignored_regions {
-            self.traverse_edges(discrete_limit, ignored_regions)?;
+            self.traverse_cells(discrete_limit, ignored_regions)?;
         } else {
             let ignored_regions = Vec::<(
                 linestring::cgmath_2d::Aabb2<F1>,
                 linestring::cgmath_2d::LineString2<F1>,
             )>::with_capacity(0);
-            self.traverse_edges(discrete_limit, &ignored_regions)?;
+            self.traverse_cells(discrete_limit, &ignored_regions)?;
         }
         Ok(())
     }
@@ -1084,7 +1084,7 @@ where
             .unwrap_or_else(|| yabf::Yabf::with_capacity(0));
 
         #[cfg(feature = "console_debug")]
-        let mut edge_lines = fnv::FnvHashMap::<usize, [F1; 4]>::default();
+        let mut edge_lines = ahash::AHashMap::<usize, [F1; 4]>::default();
 
         linestrings.clear();
         lines.clear();
@@ -1178,6 +1178,132 @@ where
         {
             self.debug_edges = Some(edge_lines);
         }
+        Ok(())
+    }
+
+    /// move across each cell and sample the lines and arcs
+    fn traverse_cells(
+        &mut self,
+        maxdist: F1,
+        ignored_regions: &[(
+            linestring::cgmath_2d::Aabb2<F1>,
+            linestring::cgmath_2d::LineString2<F1>,
+        )],
+    ) -> Result<(), CenterlineError> {
+        // de-couple self and containers
+        let mut lines = self.lines.take().ok_or_else(|| {
+            CenterlineError::InternalError(format!(
+                "traverse_edges(): could not take lines. {}",
+                line!()
+            ))
+        })?;
+        let mut linestrings = self.line_strings.take().ok_or_else(|| {
+            CenterlineError::InternalError(format!(
+                "traverse_edges(): could not take linestrings. {}",
+                line!()
+            ))
+        })?;
+
+        let mut ignored_edges = self
+            .ignored_edges
+            .take()
+            .unwrap_or_else(|| yabf::Yabf::with_capacity(0));
+
+        #[cfg(feature = "console_debug")]
+            let mut edge_lines = ahash::AHashMap::<usize, [F1; 4]>::default();
+
+        linestrings.clear();
+        lines.clear();
+
+        if !ignored_regions.is_empty() {
+            // find the groups of connected edges in this shape
+            let mut searched_edges_v = Vec::<yabf::Yabf>::new();
+            let mut searched_edges_s = ignored_edges.clone();
+            for it in self.diagram.edges().iter().enumerate() {
+                // can not use iter().filter() because of the borrow checker
+                if searched_edges_s.bit(it.0) {
+                    continue;
+                }
+                let mut edges = yabf::Yabf::with_capacity(self.diagram.edges.len());
+                self.mark_connected_edges(VD::VoronoiEdgeIndex(it.0), &mut edges, true)?;
+                searched_edges_s |= &edges;
+                searched_edges_v.push(edges);
+            }
+
+            for edges in searched_edges_v.iter() {
+                if self.edges_are_inside_ignored_region(edges, ignored_regions)? {
+                    //println!("edges: are inside ignored region {:?}", edges);
+                    ignored_edges |= &edges;
+                    continue;
+                } else {
+                    //println!("edges: are NOT inside ignored regions {:?}", edges);
+                }
+            }
+            // ignored_edges are now filled with the rejected edges
+        }
+
+        let mut used_edges = ignored_edges.clone();
+
+        for it in self.diagram.edges().iter().enumerate() {
+            // can not use iter().filter() because of the borrow checker
+            if used_edges.bit(it.0) {
+                continue;
+            }
+            let edge_id = VD::VoronoiEdgeIndex(it.0);
+
+            self.traverse_edge(
+                edge_id,
+                false,
+                &ignored_edges,
+                &mut used_edges,
+                &mut lines,
+                &mut linestrings,
+                maxdist,
+            )?;
+        }
+
+        // loop over each edge again, make sure they were all used or properly ignored.
+        for it in self.diagram.edges().iter().enumerate() {
+            // can not use iter().filter() because of the borrow checker
+            if used_edges.bit(it.0) {
+                continue;
+            }
+            let edge_id = VD::VoronoiEdgeIndex(it.0);
+            #[cfg(feature = "console_debug")]
+            println!(
+                "Did not use all edges, forcing the use of edge:{}",
+                edge_id.0
+            );
+
+            self.traverse_edge(
+                edge_id,
+                true,
+                &ignored_edges,
+                &mut used_edges,
+                &mut lines,
+                &mut linestrings,
+                maxdist,
+            )?;
+        }
+
+        #[cfg(feature = "console_debug")]
+            {
+                println!("Got {} single lines", lines.len());
+                println!("Got {} linestrings", linestrings.len());
+                println!(
+                    "self.ignored_edges {:?}",
+                    self.ignored_edges.clone().unwrap()
+                );
+                println!("     ignored_edges {:?}", ignored_edges);
+                println!("        used_edges {:?}", used_edges);
+            }
+        // put the containers back
+        self.lines = Some(lines);
+        self.line_strings = Some(linestrings);
+        #[cfg(feature = "console_debug")]
+            {
+                self.debug_edges = Some(edge_lines);
+            }
         Ok(())
     }
 
@@ -1467,7 +1593,7 @@ where
 
         // Edge is finite so we know that vertex0 and vertex1 is_some()
         let vertex0 = self.diagram.vertex_get(edge.vertex0().ok_or_else(|| {
-            CenterlineError::InternalError(format!("Could not find vertex 1. {}", line!()))
+            CenterlineError::InternalError(format!("Could not find vertex 0. {}", line!()))
         })?)?;
 
         let vertex1 = self.diagram.edge_get_vertex1(edge_id)?.ok_or_else(|| {

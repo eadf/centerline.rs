@@ -2,7 +2,7 @@
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.3.0/status.svg)](https://deps.rs/crate/centerline/0.3.0)
+[![dependency status](https://deps.rs/crate/centerline/0.4.0/status.svg)](https://deps.rs/crate/centerline/0.4.0)
 
 # Centerline
 
@@ -38,7 +38,7 @@ println!(
 ## Gui example
 
 ```fish
-cargo +nightly run --example fltk_gui --features="impl-wavefront"
+cargo +nightly run --example centerline_gui --features="impl-wavefront"
 ```
 The example only displays 2D, but the generated center-line is actually 3D line segments.\
 The Z coordinate is the distance between the 2D center-line, and the geometry that created it. 

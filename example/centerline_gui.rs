@@ -467,6 +467,7 @@ fn main() -> Result<(), CenterlineError> {
     let mut mouse_drag: Option<(i32, i32)> = None;
 
     wind.handle(move |_, ev| match ev {
+
         fltk::enums::Event::MouseWheel => {
             let event = &app::event_coords();
             //println!("mouse wheel at x:{} y:{}", event.0, event.1);
@@ -734,7 +735,7 @@ fn threaded_re_calculate(
         } else {
             false
         };
-    let _centerline_changed = if shape.simplified_centerline.is_none()
+    if shape.simplified_centerline.is_none()
         || centerline_changed
         || configuration.centerline_distance_dirty
     {
