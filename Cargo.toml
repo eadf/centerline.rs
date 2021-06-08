@@ -1,6 +1,6 @@
 [package]
 name = "centerline"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["eadf"]
 edition = "2018"
 description = "Simple library for finding centerlines of 2D closed geometry"
@@ -25,14 +25,14 @@ ahash = "0.7"
 vec_map = "0.8"
 num-traits = "0.2"
 yabf = {version="0.1",default-features=false}
-boostvoronoi = "0.8"
+boostvoronoi = "^0.8.4"
 linestring = {version="0.4",default-features=false,features=["impl-cgmath", "impl-rayon"]}
 cgmath = "0.18"
 approx = "0.4"
 thiserror = "1.0"
 rayon = "1.5"
 bitflags = "1.2"
-ordered-float = "2.1"
+ordered-float = "2.5"
 obj-rs = { version = "0.6", optional = true }
 
 [[example]]
