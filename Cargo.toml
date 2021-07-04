@@ -22,13 +22,12 @@ default = []
 [dependencies]
 num = "0.4"
 ahash = "0.7"
-vec_map = "0.8"
 num-traits = "0.2"
 yabf = {version="0.1",default-features=false}
-boostvoronoi = "^0.8.4"
-linestring = {version="0.4",default-features=false,features=["impl-cgmath", "impl-rayon"]}
+boostvoronoi = "0.9"
+linestring = {version="0.6",default-features=false,features=["cgmath", "rayon"]}
 cgmath = "0.18"
-approx = "0.4"
+approx = "0.5"
 thiserror = "1.0"
 rayon = "1.5"
 bitflags = "1.2"
@@ -48,6 +47,9 @@ path = "example/cli.rs"
 fltk = "1.0"
 itertools = "0.10"
 criterion = "0.3"
+
+[build-dependencies]
+version_check = "0.9"
 
 [[bench]]
 name = "bench"

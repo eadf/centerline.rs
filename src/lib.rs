@@ -4,9 +4,8 @@
 #![deny(unused_qualifications)]
 #![deny(unused_results)]
 #![deny(unused_imports)]
-#![feature(hash_drain_filter)]
-// from linestring
-#![feature(map_first_last)]
+#![cfg_attr(feature = "hash_drain_filter", feature(hash_drain_filter))]
+#![cfg_attr(feature = "map_first_last", feature(map_first_last))]
 
 use boostvoronoi::builder as VB;
 use boostvoronoi::diagram as VD;
@@ -113,8 +112,9 @@ fn paint_every_connected_vertex(
             }
         } else {
             return Err(CenterlineError::InternalError(format!(
-                "Vertex with id:{} dissapeared. {}",
+                "Vertex with id:{} dissapeared. {}:{}",
                 current_vertex,
+                file!(),
                 line!()
             )));
         };
@@ -205,7 +205,27 @@ pub fn remove_internal_edges(
     //println!("Internal edges: {:?}", internal_edges);
     //println!("All edges: {:?}", all_edges);
     //println!("Vertices: {:?}", obj.positions);
-    let _ = all_edges.drain_filter(|x| internal_edges.contains(x));
+    #[cfg(feature = "hash_drain_filter")]
+    {
+        let _ = all_edges.drain_filter(|x| internal_edges.contains(x));
+    }
+
+    #[cfg(not(feature = "hash_drain_filter"))]
+    {
+        // inefficient version of drain_filter for +stable
+        let kept_edges = all_edges
+            .into_iter()
+            .filter_map(|x| {
+                if internal_edges.contains(&x) {
+                    None
+                } else {
+                    Some(x)
+                }
+            })
+            .collect();
+        all_edges = kept_edges;
+    }
+
     // all_edges should now contain the outline and none of the internal edges.
     let vertices: Vec<cgmath::Point3<f32>> = obj
         .positions
@@ -278,7 +298,8 @@ where
     let highest_shape_id_plus_one = unique_shape_id_generator.next().unwrap();
     if highest_shape_id_plus_one == 0 {
         return Err(CenterlineError::InternalError(format!(
-            "Could not find any shapes to separate. {}",
+            "Could not find any shapes to separate. {}:{}",
+            file!(),
             line!()
         )));
     }
@@ -293,20 +314,45 @@ where
             println!("shape_separation:{:?}", shape_separation);
 
             return Err(CenterlineError::InternalError(format!(
-                "Could not separate all shapes, ran out of vertices. {}",
+                "Could not separate all shapes, ran out of vertices. {}:{}",
+                file!(),
                 line!()
             )));
         }
-        let drained = vertices
-            .drain_filter(|_, x| {
-                if let Some(shape) = x.shape {
-                    shape == current_shape
+        #[cfg(feature = "hash_drain_filter")]
+        {
+            let drained = vertices
+                .drain_filter(|_, x| {
+                    if let Some(shape) = x.shape {
+                        shape == current_shape
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            shape_separation.push(drained);
+        }
+        #[cfg(not(feature = "hash_drain_filter"))]
+        {
+            // inefficient version of drain_filter for +stable
+            let mut drained = ahash::AHashMap::<usize, Vertices>::default();
+            let mut new_vertices = ahash::AHashMap::<usize, Vertices>::default();
+            for (x0, x1) in vertices.into_iter() {
+                if {
+                    if let Some(shape) = x1.shape {
+                        shape == current_shape
+                    } else {
+                        false
+                    }
+                } {
+                    let _ = drained.insert(x0, x1);
                 } else {
-                    false
-                }
-            })
-            .collect();
-        shape_separation.push(drained);
+                    let _ = new_vertices.insert(x0, x1);
+                };
+            }
+            vertices = new_vertices;
+            shape_separation.push(drained);
+        }
     }
     drop(vertices);
     // now we have a list of groups of vertices, each group are connected by edges.
@@ -319,7 +365,7 @@ where
         .map(|rvi| -> Result<LineStringSet3<T>, CenterlineError> {
             if rvi.is_empty() {
                 return Err(CenterlineError::InternalError(
-                    format!("rvi.is_empty() Seems like the shape separation failed. {}", line!()),
+                    format!("rvi.is_empty() Seems like the shape separation failed. {}:{}", file!(),line!()),
                 ));
             }
             let mut loops = 0;
@@ -565,8 +611,8 @@ where
                 //println!("testing #{} vs #{}", i, j);
                 if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb())
                     && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
-                        &raw_data[i].get_convex_hull().as_ref().unwrap(),
-                        &raw_data[j].get_convex_hull().as_ref().unwrap(),
+                        raw_data[i].get_convex_hull().as_ref().unwrap(),
+                        raw_data[j].get_convex_hull().as_ref().unwrap(),
                         F::default_epsilon() * F::from(2.0).unwrap(),
                         F::default_max_ulps() * 2,
                     )
@@ -582,8 +628,8 @@ where
                     continue 'outer_loop;
                 } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb())
                     && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
-                        &raw_data[j].get_convex_hull().as_ref().unwrap(),
-                        &raw_data[i].get_convex_hull().as_ref().unwrap(),
+                        raw_data[j].get_convex_hull().as_ref().unwrap(),
+                        raw_data[i].get_convex_hull().as_ref().unwrap(),
                         F::default_epsilon() * F::from(2.0).unwrap(),
                         F::default_max_ulps() * 2,
                     )
@@ -610,19 +656,19 @@ where
 ///     * Filter out voronoi edges based on the angle to input geometry.
 ///     * Collects connected edges into line strings and line segments.
 ///     * Performs line simplification on those line strings.
-pub struct Centerline<I1, F1>
+pub struct Centerline<I, F>
 where
-    I1: InputType + Neg<Output = I1>,
-    F1: cgmath::BaseFloat + Sync + OutputType + Neg<Output = F1>,
+    I: InputType + Neg<Output = I>,
+    F: cgmath::BaseFloat + Sync + OutputType + Neg<Output = F>,
 {
     /// the input data to the voronoi diagram
-    pub segments: Vec<boostvoronoi::Line<I1>>,
+    pub segments: Vec<boostvoronoi::geometry::Line<I>>,
     /// the voronoi diagram itself
-    pub diagram: VSD::SyncVoronoiDiagram<I1, F1>,
+    pub diagram: VSD::SyncDiagram<I, F>,
     /// the individual two-point edges
-    pub lines: Option<Vec<Line3<F1>>>,
+    pub lines: Option<Vec<Line3<F>>>,
     /// concatenated connected edges
-    pub line_strings: Option<Vec<LineString3<F1>>>,
+    pub line_strings: Option<Vec<LineString3<F>>>,
 
     /// bit field defining edges rejected by EXTERNAL or INFINITE
     rejected_edges: Option<yabf::Yabf>,
@@ -630,21 +676,21 @@ where
     ignored_edges: Option<yabf::Yabf>,
 
     #[cfg(feature = "console_debug")]
-    pub debug_edges: Option<ahash::AHashMap<usize, [F1; 4]>>,
+    pub debug_edges: Option<ahash::AHashMap<usize, [F; 4]>>,
 }
 
-impl<I1, F1> Centerline<I1, F1>
+impl<I, F> Centerline<I, F>
 where
-    I1: InputType + Neg<Output = I1>,
-    F1: cgmath::BaseFloat + Sync + OutputType + Neg<Output = F1>,
+    I: InputType + Neg<Output = I>,
+    F: cgmath::BaseFloat + Sync + OutputType + Neg<Output = F>,
 {
     /// Creates a Centerline container with a set of segments
     pub fn default() -> Self {
         Self {
-            diagram: VSD::SyncVoronoiDiagram::default(),
-            segments: Vec::<boostvoronoi::Line<I1>>::default(),
-            lines: Some(Vec::<Line3<F1>>::new()),
-            line_strings: Some(Vec::<LineString3<F1>>::new()),
+            diagram: VSD::SyncDiagram::default(),
+            segments: Vec::<boostvoronoi::geometry::Line<I>>::default(),
+            lines: Some(Vec::<Line3<F>>::new()),
+            line_strings: Some(Vec::<LineString3<F>>::new()),
             rejected_edges: None,
             ignored_edges: None,
             #[cfg(feature = "console_debug")]
@@ -653,12 +699,12 @@ where
     }
 
     /// Creates a Centerline container with a set of segments
-    pub fn with_segments(segments: Vec<boostvoronoi::Line<I1>>) -> Self {
+    pub fn with_segments(segments: Vec<boostvoronoi::geometry::Line<I>>) -> Self {
         Self {
-            diagram: VSD::SyncVoronoiDiagram::default(),
+            diagram: VSD::SyncDiagram::default(),
             segments,
-            lines: Some(Vec::<Line3<F1>>::new()),
-            line_strings: Some(Vec::<LineString3<F1>>::new()),
+            lines: Some(Vec::<Line3<F>>::new()),
+            line_strings: Some(Vec::<LineString3<F>>::new()),
             rejected_edges: None,
             ignored_edges: None,
             #[cfg(feature = "console_debug")]
@@ -678,7 +724,7 @@ where
             println!("];");
         }
         vb.with_segments(self.segments.iter())?;
-        self.diagram = vb.construct()?.into();
+        self.diagram = vb.build()?.into();
         self.reject_external_edges()?;
         #[cfg(feature = "console_debug")]
         println!(
@@ -693,12 +739,12 @@ where
     /// Collect the rest of the edges into connected line-strings and line segments.
     pub fn calculate_centerline(
         &mut self,
-        cos_angle: F1,
-        discrete_limit: F1,
+        cos_angle: F,
+        discrete_limit: F,
         ignored_regions: Option<
             &Vec<(
-                linestring::cgmath_2d::Aabb2<F1>,
-                linestring::cgmath_2d::LineString2<F1>,
+                linestring::cgmath_2d::Aabb2<F>,
+                linestring::cgmath_2d::LineString2<F>,
             )>,
         >,
     ) -> Result<(), CenterlineError> {
@@ -707,8 +753,8 @@ where
             self.traverse_edges(discrete_limit, ignored_regions)?;
         } else {
             let ignored_regions = Vec::<(
-                linestring::cgmath_2d::Aabb2<F1>,
-                linestring::cgmath_2d::LineString2<F1>,
+                linestring::cgmath_2d::Aabb2<F>,
+                linestring::cgmath_2d::LineString2<F>,
             )>::with_capacity(0);
             self.traverse_edges(discrete_limit, &ignored_regions)?;
         }
@@ -721,11 +767,11 @@ where
     /// TODO: make this return a true mesh
     pub fn calculate_centerline_mesh(
         &mut self,
-        discrete_limit: F1,
+        discrete_limit: F,
         ignored_regions: Option<
             &Vec<(
-                linestring::cgmath_2d::Aabb2<F1>,
-                linestring::cgmath_2d::LineString2<F1>,
+                linestring::cgmath_2d::Aabb2<F>,
+                linestring::cgmath_2d::LineString2<F>,
             )>,
         >,
     ) -> Result<(), CenterlineError> {
@@ -735,8 +781,8 @@ where
             self.traverse_cells(discrete_limit, ignored_regions)?;
         } else {
             let ignored_regions = Vec::<(
-                linestring::cgmath_2d::Aabb2<F1>,
-                linestring::cgmath_2d::LineString2<F1>,
+                linestring::cgmath_2d::Aabb2<F>,
+                linestring::cgmath_2d::LineString2<F>,
             )>::with_capacity(0);
             self.traverse_cells(discrete_limit, &ignored_regions)?;
         }
@@ -755,8 +801,8 @@ where
 
     pub fn retrieve_point(
         &self,
-        cell_id: VD::VoronoiCellIndex,
-    ) -> Result<boostvoronoi::Point<I1>, CenterlineError> {
+        cell_id: VD::CellIndex,
+    ) -> Result<boostvoronoi::geometry::Point<I>, CenterlineError> {
         let (index, category) = self.diagram.cell_get(cell_id)?.source_index_2();
         match category {
             VD::SourceCategory::SinglePoint => panic!("No points in the input data"),
@@ -769,14 +815,14 @@ where
 
     pub fn retrieve_segment(
         &self,
-        cell_id: VD::VoronoiCellIndex,
-    ) -> Result<boostvoronoi::Line<I1>, CenterlineError> {
+        cell_id: VD::CellIndex,
+    ) -> Result<boostvoronoi::geometry::Line<I>, CenterlineError> {
         let cell = self.diagram.cell_get(cell_id)?;
         Ok(self.segments[cell.source_index()])
     }
 
     /// returns a reference to the internal voronoi diagram
-    pub fn diagram(&self) -> &VSD::SyncVoronoiDiagram<I1, F1> {
+    pub fn diagram(&self) -> &VSD::SyncDiagram<I, F> {
         &self.diagram
     }
 
@@ -787,12 +833,12 @@ where
         rejected_edges.set_bit(self.diagram().edges().len(), true);
 
         for edge in self.diagram.edges().iter() {
-            let edge_id = edge.get_id();
+            let edge_id = edge.id();
             if edge.is_secondary() {
                 rejected_edges.set_bit(edge_id.0, true);
                 //self.diagram
                 //    .edge_or_color(edge_id, ColorFlag::SECONDARY.bits)?;
-                let twin_id = self.diagram.edge_get_twin_err(edge_id)?;
+                let twin_id = self.diagram.edge_get_twin(edge_id)?;
                 //self.diagram
                 //    .edge_or_color(twin_id, ColorFlag::SECONDARY.bits);
                 rejected_edges.set_bit(twin_id.0, true);
@@ -815,11 +861,11 @@ where
     /// a predefined value.
     /// TODO: there must be a quicker way to get this information from the voronoi diagram
     /// maybe mark each vertex identical to input points..
-    fn angle_test(&mut self, cos_angle: F1) -> Result<(), CenterlineError> {
+    fn angle_test(&mut self, cos_angle: F) -> Result<(), CenterlineError> {
         let mut ignored_edges = self.rejected_edges.clone().take().unwrap();
 
         for cell in self.diagram.cells().iter() {
-            let cell_id = VD::VoronoiCellIndex(cell.get_id());
+            let cell_id = cell.id();
 
             if !cell.contains_segment() {
                 continue;
@@ -836,68 +882,67 @@ where
 
             if let Some(incident_e) = cell.get_incident_edge() {
                 //println!("incident_e {:?}", incident_e);
-                let mut e: Option<VD::VoronoiEdgeIndex> = Some(incident_e);
+                let mut e = incident_e;
                 loop {
-                    e = self.diagram.edge_get(e.unwrap())?.next();
+                    e = self.diagram.edge_get_next(e)?;
 
-                    if let Some(e) = e {
-                        if !ignored_edges.bit(e.0) {
-                            // all infinite edges should be rejected at this point, so
-                            // all edges should contain a vertex0 and vertex1
+                    if !ignored_edges.bit(e.0) {
+                        // all infinite edges should be rejected at this point, so
+                        // all edges should contain a vertex0 and vertex1
 
-                            let vertex0 = self.diagram.edge_get_vertex0(e)?;
-                            let vertex0 = vertex0.map(|x| self.diagram.vertex_get(x));
+                        let vertex0 = self.diagram.edge_get_vertex0(e)?;
+                        let vertex0 = vertex0.map(|x| self.diagram.vertex_get(x));
 
-                            if let Some(Ok(vertex0)) = vertex0 {
-                                let vertex0 = cgmath::Point2 {
-                                    x: vertex0.x(),
-                                    y: vertex0.y(),
+                        if let Some(Ok(vertex0)) = vertex0 {
+                            let vertex0 = cgmath::Point2 {
+                                x: vertex0.x(),
+                                y: vertex0.y(),
+                            };
+                            let vertex1 = self.diagram.edge_get_vertex1(e)?;
+                            let vertex1 = vertex1.map(|x| self.diagram.vertex_get(x));
+                            if let Some(Ok(vertex1)) = vertex1 {
+                                let vertex1 = cgmath::Point2 {
+                                    x: vertex1.x(),
+                                    y: vertex1.y(),
                                 };
-                                let vertex1 = self.diagram.edge_get_vertex1(e)?;
-                                let vertex1 = vertex1.map(|x| self.diagram.vertex_get(x));
-                                if let Some(Ok(vertex1)) = vertex1 {
-                                    let vertex1 = cgmath::Point2 {
-                                        x: vertex1.x(),
-                                        y: vertex1.y(),
-                                    };
-                                    let _ = self.angle_test_6(
-                                        cos_angle,
-                                        &mut ignored_edges,
-                                        e,
-                                        &vertex0,
-                                        &vertex1,
-                                        &point0,
-                                        &point1,
-                                    )? || self.angle_test_6(
-                                        cos_angle,
-                                        &mut ignored_edges,
-                                        e,
-                                        &vertex0,
-                                        &vertex1,
-                                        &point1,
-                                        &point0,
-                                    )? || self.angle_test_6(
-                                        cos_angle,
-                                        &mut ignored_edges,
-                                        e,
-                                        &vertex1,
-                                        &vertex0,
-                                        &point0,
-                                        &point1,
-                                    )? || self.angle_test_6(
-                                        cos_angle,
-                                        &mut ignored_edges,
-                                        e,
-                                        &vertex1,
-                                        &vertex0,
-                                        &point1,
-                                        &point0,
-                                    )?;
-                                }
+                                let _ = self.angle_test_6(
+                                    cos_angle,
+                                    &mut ignored_edges,
+                                    e,
+                                    &vertex0,
+                                    &vertex1,
+                                    &point0,
+                                    &point1,
+                                )? || self.angle_test_6(
+                                    cos_angle,
+                                    &mut ignored_edges,
+                                    e,
+                                    &vertex0,
+                                    &vertex1,
+                                    &point1,
+                                    &point0,
+                                )? || self.angle_test_6(
+                                    cos_angle,
+                                    &mut ignored_edges,
+                                    e,
+                                    &vertex1,
+                                    &vertex0,
+                                    &point0,
+                                    &point1,
+                                )? || self.angle_test_6(
+                                    cos_angle,
+                                    &mut ignored_edges,
+                                    e,
+                                    &vertex1,
+                                    &vertex0,
+                                    &point1,
+                                    &point0,
+                                )?;
                             }
                         }
                     }
-                    if e.is_none() || e.unwrap() == incident_e {
+
+                    if e == incident_e {
                         break;
                     }
                 }
@@ -911,22 +956,21 @@ where
     #[allow(clippy::too_many_arguments)]
     fn angle_test_6(
         &self,
-        cos_angle: F1,
+        cos_angle: F,
         ignored_edges: &mut yabf::Yabf,
-        edge_id: VD::VoronoiEdgeIndex,
-        vertex0: &cgmath::Point2<F1>,
-        vertex1: &cgmath::Point2<F1>,
-        s_point_0: &cgmath::Point2<F1>,
-        s_point_1: &cgmath::Point2<F1>,
+        edge_id: VD::EdgeIndex,
+        vertex0: &cgmath::Point2<F>,
+        vertex1: &cgmath::Point2<F>,
+        s_point_0: &cgmath::Point2<F>,
+        s_point_1: &cgmath::Point2<F>,
     ) -> Result<bool, CenterlineError> {
-        if approx::ulps_eq!(vertex0.x, s_point_0.x) && approx::ulps_eq!(vertex0.y, s_point_0.y) {
+        if cgmath::ulps_eq!(vertex0.x, s_point_0.x) && cgmath::ulps_eq!(vertex0.y, s_point_0.y) {
             // todo better to compare to the square of the dot product, fewer operations.
             let segment_v = (s_point_1 - s_point_0).normalize();
             let vertex_v = (vertex1 - vertex0).normalize();
             if segment_v.dot(vertex_v).abs() < cos_angle {
-                if let Some(twin) = self.diagram.edge_get(edge_id)?.twin() {
-                    ignored_edges.set_bit(twin.0, true);
-                }
+                let twin = self.diagram.edge_get_twin(edge_id)?;
+                ignored_edges.set_bit(twin.0, true);
                 ignored_edges.set_bit(edge_id.0, true);
                 return Ok(true);
             }
@@ -940,7 +984,7 @@ where
     /// for the first edge.
     fn mark_connected_edges(
         &self,
-        edge_id: VD::VoronoiEdgeIndex,
+        edge_id: VD::EdgeIndex,
         marked_edges: &mut yabf::Yabf,
         initial: bool,
     ) -> Result<(), CenterlineError> {
@@ -949,7 +993,7 @@ where
         }
 
         let mut initial = initial;
-        let mut queue = VecDeque::<VD::VoronoiEdgeIndex>::new();
+        let mut queue = VecDeque::<VD::EdgeIndex>::new();
         queue.push_back(edge_id);
 
         'outer: while !queue.is_empty() {
@@ -972,9 +1016,9 @@ where
             #[allow(unused_assignments)]
             if initial {
                 initial = false;
-                queue.push_back(self.diagram.edge_get_twin_err(edge_id)?);
+                queue.push_back(self.diagram.edge_get_twin(edge_id)?);
             } else {
-                marked_edges.set_bit(self.diagram.edge_get_twin_err(edge_id)?.0, true);
+                marked_edges.set_bit(self.diagram.edge_get_twin(edge_id)?.0, true);
             }
 
             if v1.is_none() || !self.diagram.edge_get(edge_id)?.is_primary() {
@@ -991,14 +1035,14 @@ where
                     continue 'outer;
                 }
                 //self.reject_vertex(v1, color);
-                let mut e = v1.get_incident_edge();
-                let v_incident_edge = e;
-                while let Some(this_edge) = e {
+                let mut this_edge = v1.get_incident_edge()?;
+                let v_incident_edge = this_edge;
+                loop {
                     if !marked_edges.bit(this_edge.0) {
                         queue.push_back(this_edge);
                     }
-                    e = self.diagram.edge_rot_next(this_edge)?;
-                    if e == v_incident_edge {
+                    this_edge = self.diagram.edge_rot_next(this_edge)?;
+                    if this_edge == v_incident_edge {
                         break;
                     }
                 }
@@ -1013,14 +1057,14 @@ where
         &self,
         edges: &yabf::Yabf,
         ignored_regions: &[(
-            linestring::cgmath_2d::Aabb2<F1>,
-            linestring::cgmath_2d::LineString2<F1>,
+            linestring::cgmath_2d::Aabb2<F>,
+            linestring::cgmath_2d::LineString2<F>,
         )],
     ) -> Result<bool, CenterlineError> {
-        let is_inside_region = |edge: VD::VoronoiEdgeIndex,
+        let is_inside_region = |edge: VD::EdgeIndex,
                                 region: &(
-            linestring::cgmath_2d::Aabb2<F1>,
-            linestring::cgmath_2d::LineString2<F1>,
+            linestring::cgmath_2d::Aabb2<F>,
+            linestring::cgmath_2d::LineString2<F>,
         )|
          -> Result<bool, CenterlineError> {
             let v0 = self.diagram.edge_get_vertex0(edge)?.unwrap();
@@ -1044,7 +1088,7 @@ where
 
         'outer: for region in ignored_regions.iter().enumerate() {
             for edge in edges.into_iter() {
-                if !is_inside_region(VD::VoronoiEdgeIndex(edge), region.1)? {
+                if !is_inside_region(VD::EdgeIndex(edge), region.1)? {
                     //println!("edge: {:?} is not inside region {}, skipping", edge, region.0);
                     continue 'outer;
                 }
@@ -1058,22 +1102,24 @@ where
     /// move across each edge and sample the lines and arcs
     fn traverse_edges(
         &mut self,
-        maxdist: F1,
+        maxdist: F,
         ignored_regions: &[(
-            linestring::cgmath_2d::Aabb2<F1>,
-            linestring::cgmath_2d::LineString2<F1>,
+            linestring::cgmath_2d::Aabb2<F>,
+            linestring::cgmath_2d::LineString2<F>,
         )],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
         let mut lines = self.lines.take().ok_or_else(|| {
             CenterlineError::InternalError(format!(
-                "traverse_edges(): could not take lines. {}",
+                "traverse_edges(): could not take lines. {}:{}",
+                file!(),
                 line!()
             ))
         })?;
         let mut linestrings = self.line_strings.take().ok_or_else(|| {
             CenterlineError::InternalError(format!(
-                "traverse_edges(): could not take linestrings. {}",
+                "traverse_edges(): could not take linestrings. {}:{}",
+                file!(),
                 line!()
             ))
         })?;
@@ -1084,7 +1130,7 @@ where
             .unwrap_or_else(|| yabf::Yabf::with_capacity(0));
 
         #[cfg(feature = "console_debug")]
-        let mut edge_lines = ahash::AHashMap::<usize, [F1; 4]>::default();
+        let mut edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
 
         linestrings.clear();
         lines.clear();
@@ -1098,8 +1144,8 @@ where
                 if searched_edges_s.bit(it.0) {
                     continue;
                 }
-                let mut edges = yabf::Yabf::with_capacity(self.diagram.edges.len());
-                self.mark_connected_edges(VD::VoronoiEdgeIndex(it.0), &mut edges, true)?;
+                let mut edges = yabf::Yabf::with_capacity(self.diagram.edges().len());
+                self.mark_connected_edges(VD::EdgeIndex(it.0), &mut edges, true)?;
                 searched_edges_s |= &edges;
                 searched_edges_v.push(edges);
             }
@@ -1107,7 +1153,7 @@ where
             for edges in searched_edges_v.iter() {
                 if self.edges_are_inside_ignored_region(edges, ignored_regions)? {
                     //println!("edges: are inside ignored region {:?}", edges);
-                    ignored_edges |= &edges;
+                    ignored_edges |= edges;
                     continue;
                 } else {
                     //println!("edges: are NOT inside ignored regions {:?}", edges);
@@ -1123,7 +1169,7 @@ where
             if used_edges.bit(it.0) {
                 continue;
             }
-            let edge_id = VD::VoronoiEdgeIndex(it.0);
+            let edge_id = VD::EdgeIndex(it.0);
 
             self.traverse_edge(
                 edge_id,
@@ -1142,7 +1188,7 @@ where
             if used_edges.bit(it.0) {
                 continue;
             }
-            let edge_id = VD::VoronoiEdgeIndex(it.0);
+            let edge_id = VD::EdgeIndex(it.0);
             #[cfg(feature = "console_debug")]
             println!(
                 "Did not use all edges, forcing the use of edge:{}",
@@ -1184,22 +1230,24 @@ where
     /// move across each cell and sample the lines and arcs
     fn traverse_cells(
         &mut self,
-        maxdist: F1,
+        maxdist: F,
         ignored_regions: &[(
-            linestring::cgmath_2d::Aabb2<F1>,
-            linestring::cgmath_2d::LineString2<F1>,
+            linestring::cgmath_2d::Aabb2<F>,
+            linestring::cgmath_2d::LineString2<F>,
         )],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
         let mut lines = self.lines.take().ok_or_else(|| {
             CenterlineError::InternalError(format!(
-                "traverse_edges(): could not take lines. {}",
+                "traverse_edges(): could not take lines. {}:{}",
+                file!(),
                 line!()
             ))
         })?;
         let mut linestrings = self.line_strings.take().ok_or_else(|| {
             CenterlineError::InternalError(format!(
-                "traverse_edges(): could not take linestrings. {}",
+                "traverse_edges(): could not take linestrings. {}:{}",
+                file!(),
                 line!()
             ))
         })?;
@@ -1210,7 +1258,7 @@ where
             .unwrap_or_else(|| yabf::Yabf::with_capacity(0));
 
         #[cfg(feature = "console_debug")]
-            let mut edge_lines = ahash::AHashMap::<usize, [F1; 4]>::default();
+        let mut edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
 
         linestrings.clear();
         lines.clear();
@@ -1224,8 +1272,8 @@ where
                 if searched_edges_s.bit(it.0) {
                     continue;
                 }
-                let mut edges = yabf::Yabf::with_capacity(self.diagram.edges.len());
-                self.mark_connected_edges(VD::VoronoiEdgeIndex(it.0), &mut edges, true)?;
+                let mut edges = yabf::Yabf::with_capacity(self.diagram.edges().len());
+                self.mark_connected_edges(VD::EdgeIndex(it.0), &mut edges, true)?;
                 searched_edges_s |= &edges;
                 searched_edges_v.push(edges);
             }
@@ -1233,7 +1281,7 @@ where
             for edges in searched_edges_v.iter() {
                 if self.edges_are_inside_ignored_region(edges, ignored_regions)? {
                     //println!("edges: are inside ignored region {:?}", edges);
-                    ignored_edges |= &edges;
+                    ignored_edges |= edges;
                     continue;
                 } else {
                     //println!("edges: are NOT inside ignored regions {:?}", edges);
@@ -1249,7 +1297,7 @@ where
             if used_edges.bit(it.0) {
                 continue;
             }
-            let edge_id = VD::VoronoiEdgeIndex(it.0);
+            let edge_id = VD::EdgeIndex(it.0);
 
             self.traverse_edge(
                 edge_id,
@@ -1268,7 +1316,7 @@ where
             if used_edges.bit(it.0) {
                 continue;
             }
-            let edge_id = VD::VoronoiEdgeIndex(it.0);
+            let edge_id = VD::EdgeIndex(it.0);
             #[cfg(feature = "console_debug")]
             println!(
                 "Did not use all edges, forcing the use of edge:{}",
@@ -1287,23 +1335,23 @@ where
         }
 
         #[cfg(feature = "console_debug")]
-            {
-                println!("Got {} single lines", lines.len());
-                println!("Got {} linestrings", linestrings.len());
-                println!(
-                    "self.ignored_edges {:?}",
-                    self.ignored_edges.clone().unwrap()
-                );
-                println!("     ignored_edges {:?}", ignored_edges);
-                println!("        used_edges {:?}", used_edges);
-            }
+        {
+            println!("Got {} single lines", lines.len());
+            println!("Got {} linestrings", linestrings.len());
+            println!(
+                "self.ignored_edges {:?}",
+                self.ignored_edges.clone().unwrap()
+            );
+            println!("     ignored_edges {:?}", ignored_edges);
+            println!("        used_edges {:?}", used_edges);
+        }
         // put the containers back
         self.lines = Some(lines);
         self.line_strings = Some(linestrings);
         #[cfg(feature = "console_debug")]
-            {
-                self.debug_edges = Some(edge_lines);
-            }
+        {
+            self.debug_edges = Some(edge_lines);
+        }
         Ok(())
     }
 
@@ -1311,13 +1359,14 @@ where
     #[inline(always)]
     fn mark_edge_and_twin_as_used(
         &self,
-        edge_id: VD::VoronoiEdgeIndex,
+        edge_id: VD::EdgeIndex,
         used_edges: &mut yabf::Yabf,
     ) -> Result<(), CenterlineError> {
         used_edges.set_bit(edge_id.0, true);
         #[cfg(feature = "console_debug")]
         print!("marking {}", edge_id.0);
-        if let Some(twin) = self.diagram.edge_get(edge_id)?.twin() {
+        {
+            let twin = self.diagram.edge_get_twin(edge_id)?;
             #[cfg(feature = "console_debug")]
             print!(" & {}", twin.0);
             if used_edges.bit(twin.0) {
@@ -1336,13 +1385,13 @@ where
     /// If force_seed_edge is set to true, the seed_edge will be used as a starting point.
     fn traverse_edge(
         &self,
-        seed_edge: VD::VoronoiEdgeIndex,
+        seed_edge: VD::EdgeIndex,
         force_seed_edge: bool,
         ignored_edges: &yabf::Yabf,
         used_edges: &mut yabf::Yabf,
-        lines: &mut Vec<Line3<F1>>,
-        linestrings: &mut Vec<LineString3<F1>>,
-        maxdist: F1,
+        lines: &mut Vec<Line3<F>>,
+        linestrings: &mut Vec<LineString3<F>>,
+        maxdist: F,
     ) -> Result<(), CenterlineError> {
         #[cfg(feature = "console_debug")]
         println!();
@@ -1350,19 +1399,19 @@ where
         println!("->traverse_edge({})", seed_edge.0);
 
         #[cfg(feature = "console_debug")]
-        let mut mockup = Vec::<Vec<VD::VoronoiEdgeIndex>>::default();
+        let mut mockup = Vec::<Vec<VD::EdgeIndex>>::default();
 
         let found_edge = force_seed_edge
             || self
                 .diagram
-                .edge_rot_next_iterator(Some(seed_edge))
+                .edge_rot_next_iterator(seed_edge)
                 .filter(|x| !ignored_edges.bit(x.0))
                 .take(2) // we do not need more than 2 for the test
                 .count()
                 == 1;
         if found_edge {
-            let mut start_points = VecDeque::<VD::VoronoiEdgeIndex>::default();
-            let mut current_edge_set = Vec::<VD::VoronoiEdgeIndex>::new();
+            let mut start_points = VecDeque::<VD::EdgeIndex>::default();
+            let mut current_edge_set = Vec::<VD::EdgeIndex>::new();
             start_points.push_front(seed_edge);
             while !start_points.is_empty() {
                 #[cfg(feature = "console_debug")]
@@ -1372,8 +1421,9 @@ where
                 if ignored_edges.bit(edge.0) {
                     // Should never happen
                     return Err(CenterlineError::InternalError(format!(
-                        "should never happen: edge {} already in ignore list. {}",
+                        "should never happen: edge {} already in ignore list. {}:{}",
                         edge.0,
+                        file!(),
                         line!()
                     )));
                 }
@@ -1389,15 +1439,15 @@ where
                 current_edge_set.push(edge);
                 self.mark_edge_and_twin_as_used(edge, used_edges)?;
 
-                let mut next_edge_o = self.diagram.edge_get(edge)?.next();
-                while next_edge_o.is_some() {
+                let mut next_edge = self.diagram.edge_get(edge)?.next()?;
+                loop {
                     #[cfg(feature = "console_debug")]
-                    print!("Inner loop next_edge={} ", next_edge_o.unwrap().0);
+                    print!("Inner loop next_edge={} ", next_edge.unwrap().0);
 
                     // it does not matter if next_edge is rejected/valid, it will be fixed by the iterator
-                    let next_edges: Vec<VD::VoronoiEdgeIndex> = self
+                    let next_edges: Vec<VD::EdgeIndex> = self
                         .diagram
-                        .edge_rot_next_iterator(next_edge_o)
+                        .edge_rot_next_iterator(next_edge)
                         .filter(|x| !ignored_edges.bit(x.0))
                         .collect();
 
@@ -1415,7 +1465,7 @@ where
                     }
                     match next_edges.len() {
                         1 | 2 => {
-                            let next_edges: Vec<VD::VoronoiEdgeIndex> = next_edges
+                            let next_edges: Vec<VD::EdgeIndex> = next_edges
                                 .into_iter()
                                 .filter(|x| !used_edges.bit(x.0))
                                 .collect();
@@ -1425,7 +1475,7 @@ where
                                 current_edge_set.push(e);
                                 self.mark_edge_and_twin_as_used(e, used_edges)?;
 
-                                next_edge_o = self.diagram.edge_get(e)?.next();
+                                next_edge = self.diagram.edge_get(e)?.next()?;
                             } else {
                                 // terminating the line string, pushing candidates
                                 let _ = self.convert_edges_to_lines(
@@ -1437,7 +1487,7 @@ where
                                 #[cfg(feature = "console_debug")]
                                 mockup.push(current_edge_set.clone());
                                 current_edge_set.clear();
-                                next_edge_o = None;
+
                                 if !next_edges.is_empty() {
                                     #[cfg(feature = "console_debug")]
                                     print!("1|2 Pushing new start points: [");
@@ -1454,6 +1504,7 @@ where
                                     println!("]");
                                     println!("1|2 Starting new set");
                                 }
+                                break;
                             }
                             continue;
                         }
@@ -1481,11 +1532,11 @@ where
                             #[cfg(feature = "console_debug")]
                             mockup.push(current_edge_set.clone());
                             current_edge_set.clear();
-                            next_edge_o = None;
+
                             #[cfg(feature = "console_debug")]
                             println!("0|_ Starting new set");
 
-                            continue;
+                            break;
                         }
                     }
                 }
@@ -1522,10 +1573,10 @@ where
 
     fn convert_edges_to_lines(
         &self,
-        edges: &[VD::VoronoiEdgeIndex],
-        lines: &mut Vec<Line3<F1>>,
-        linestrings: &mut Vec<LineString3<F1>>,
-        maxdist: F1,
+        edges: &[VD::EdgeIndex],
+        lines: &mut Vec<Line3<F>>,
+        linestrings: &mut Vec<LineString3<F>>,
+        maxdist: F,
     ) -> Result<(), CenterlineError> {
         #[cfg(feature = "console_debug")]
         println!();
@@ -1539,7 +1590,7 @@ where
             1 => {
                 let edge_id = edges.first().unwrap();
                 let edge = self.diagram.edge_get(*edge_id)?;
-                match self.convert_edge_to_shape(&edge) {
+                match self.convert_edge_to_shape(edge) {
                     Ok(cgmath_3d::Shape3d::Line(l)) => lines.push(l),
                     Ok(cgmath_3d::Shape3d::ParabolicArc(a)) => {
                         linestrings.push(a.discretise_3d(maxdist));
@@ -1553,10 +1604,10 @@ where
                 }
             }
             _ => {
-                let mut ls = LineString3::<F1>::default();
+                let mut ls = LineString3::<F>::default();
                 for edge_id in edges.iter() {
                     let edge = self.diagram.edge_get(*edge_id)?;
-                    match self.convert_edge_to_shape(&edge)? {
+                    match self.convert_edge_to_shape(edge)? {
                         cgmath_3d::Shape3d::Line(l) => {
                             //println!("->got {:?}", l);
                             ls.push(l.start);
@@ -1571,7 +1622,8 @@ where
                         // should not happen
                         cgmath_3d::Shape3d::Linestring(_s) => {
                             return Err(CenterlineError::InternalError(format!(
-                                "convert_edges_to_lines() got an unexpected linestring. {}",
+                                "convert_edges_to_lines() got an unexpected linestring. {}:{}",
+                                file!(),
                                 line!()
                             )))
                         }
@@ -1586,18 +1638,26 @@ where
 
     fn convert_edge_to_shape(
         &self,
-        edge: &VD::VoronoiEdge<I1, F1>,
-    ) -> Result<cgmath_3d::Shape3d<F1>, CenterlineError> {
-        let edge_id = edge.get_id();
-        let edge_twin_id = self.diagram.edge_get_twin_err(edge_id)?;
+        edge: &VD::Edge<I, F>,
+    ) -> Result<cgmath_3d::Shape3d<F>, CenterlineError> {
+        let edge_id = edge.id();
+        let edge_twin_id = self.diagram.edge_get_twin(edge_id)?;
 
         // Edge is finite so we know that vertex0 and vertex1 is_some()
         let vertex0 = self.diagram.vertex_get(edge.vertex0().ok_or_else(|| {
-            CenterlineError::InternalError(format!("Could not find vertex 0. {}", line!()))
+            CenterlineError::InternalError(format!(
+                "Could not find vertex 0. {}:{}",
+                file!(),
+                line!()
+            ))
         })?)?;
 
         let vertex1 = self.diagram.edge_get_vertex1(edge_id)?.ok_or_else(|| {
-            CenterlineError::InternalError(format!("Could not find vertex 1. {}", line!()))
+            CenterlineError::InternalError(format!(
+                "Could not find vertex 1. {}:{}",
+                file!(),
+                line!()
+            ))
         })?;
         let vertex1 = self.diagram.vertex_get(vertex1)?;
 
@@ -1683,7 +1743,7 @@ where
         } else {
             let distance_to_start = {
                 if vertex0.is_site_point() {
-                    F1::zero()
+                    F::zero()
                 } else if cell.contains_point() {
                     let cell_point = self.retrieve_point(cell_id)?;
                     let cell_point = cgmath::Point2 {
@@ -1712,7 +1772,7 @@ where
             };
             let distance_to_end = {
                 if vertex1.is_site_point() {
-                    F1::zero()
+                    F::zero()
                 } else {
                     let cell_id = self
                         .diagram
@@ -1766,7 +1826,7 @@ where
     }
 
     #[inline(always)]
-    pub fn i2f(input: I1) -> F1 {
-        num::cast::<I1, F1>(input).unwrap()
+    pub fn i2f(input: I) -> F {
+        num::cast::<I, F>(input).unwrap()
     }
 }

@@ -42,7 +42,6 @@ library. If this is what you want to do, use the GNU Lesser General Public
 License instead of this License. But first, please read <https://www.gnu.org/
 licenses /why-not-lgpl.html>.
 */
-#![feature(hash_drain_filter)]
 
 use centerline::Centerline;
 use centerline::CenterlineError;
@@ -467,7 +466,6 @@ fn main() -> Result<(), CenterlineError> {
     let mut mouse_drag: Option<(i32, i32)> = None;
 
     wind.handle(move |_, ev| match ev {
-
         fltk::enums::Event::MouseWheel => {
             let event = &app::event_coords();
             //println!("mouse wheel at x:{} y:{}", event.0, event.1);
@@ -846,12 +844,12 @@ fn recalculate_voronoi_input(
                     s_lines.len()
                 );
                 for lineseq in s_lines.as_lines_iter() {
-                    centerline.segments.push(boostvoronoi::Line::new(
-                        boostvoronoi::Point {
+                    centerline.segments.push(boostvoronoi::geometry::Line::new(
+                        boostvoronoi::geometry::Point {
                             x: lineseq.start.x as i32,
                             y: lineseq.start.y as i32,
                         },
-                        boostvoronoi::Point {
+                        boostvoronoi::geometry::Point {
                             x: lineseq.end.x as i32,
                             y: lineseq.end.y as i32,
                         },
@@ -861,12 +859,12 @@ fn recalculate_voronoi_input(
                 #[cfg(feature = "console_debug")]
                 println!("no reduction");
                 for lineseq in lines.as_lines_iter() {
-                    centerline.segments.push(boostvoronoi::Line::new(
-                        boostvoronoi::Point {
+                    centerline.segments.push(boostvoronoi::geometry::Line::new(
+                        boostvoronoi::geometry::Point {
                             x: lineseq.start.x as i32,
                             y: lineseq.start.y as i32,
                         },
-                        boostvoronoi::Point {
+                        boostvoronoi::geometry::Point {
                             x: lineseq.end.x as i32,
                             y: lineseq.end.y as i32,
                         },

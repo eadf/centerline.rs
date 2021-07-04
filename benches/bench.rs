@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 
-use boostvoronoi::Line;
+use boostvoronoi::geometry::Line;
 use centerline::Centerline;
 
 #[cfg(test)]

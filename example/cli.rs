@@ -35,7 +35,7 @@ fn main() -> Result<(), CenterlineError> {
         .enumerate()
         .filter(|(i, _)| !rejected_edges.bit(*i))
     {
-        let twin = centerline.diagram().edge_get(e.get_id())?.twin();
+        let twin = centerline.diagram().edge_get(e.id())?.twin();
         let twin_i: Vec<bool> = twin.iter().map(|x| rejected_edges.bit(x.0)).collect();
         print!(
             "edge#{} {:?} {} {:?} {:?}",
@@ -47,7 +47,7 @@ fn main() -> Result<(), CenterlineError> {
         );
         // all edges without v1 and/or v0 are already filtered out
 
-        let eid = e.get_id();
+        let eid = e.id();
         let v0 = centerline.diagram().edge_get_vertex0(eid)?.unwrap();
         let v0 = centerline.diagram().vertex_get(v0)?;
 

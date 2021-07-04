@@ -1,5 +1,4 @@
-[![Crates.io](https://meritbadge.herokuapp.com/centerline)](https://crates.io/crates/centerline)
-[![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
+[![crates.io](https://img.shields.io/crates/v/centerline.svg)](https://crates.io/crates/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
 [![dependency status](https://deps.rs/crate/centerline/0.4.1/status.svg)](https://deps.rs/crate/centerline/0.4.1)
@@ -38,7 +37,7 @@ println!(
 ## Gui example
 
 ```fish
-cargo +nightly run --example fltk_gui --features="impl-wavefront"
+cargo run --example fltk_gui --features=impl-wavefront --release"
 ```
 The example only displays 2D, but the generated center-line is actually 3D line segments.\
 The Z coordinate is the distance between the 2D center-line, and the geometry that created it. 
@@ -48,14 +47,9 @@ Also make sure there are no intersecting outer edges.
 
 ## Rust requirement
 
-Requires `#![feature(hash_drain_filter)]` and `#![feature(map_first_last)]` i.e. `rust +nightly`
+Will automatically use `#![feature(hash_drain_filter)]` and `#![feature(map_first_last)]` if run on `rust +nightly`. 
 
 ## Todo
 
-- [x] Shapes w/o a lead-in edge will not be drawn 
-- [x] Group related shapes together based on convex hull and not just AABB
-- [x] Rayon over each shape group
-- [x] Open file dialogue for fltk_gui
-- [x] Maybe, maybe make it possible to save result from fltk_gui :)
-- [x] Make an option to remove inner center-lines of inner shapes. I.e. the holes in letters.
+- [ ] Sometimes a shape registers as 'outside' it's convex hull 
 - [ ] Add opengl to fltk_gui so that the 3D aspect of the center-line can be visualized. 
