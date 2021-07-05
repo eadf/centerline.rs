@@ -215,13 +215,7 @@ pub fn remove_internal_edges(
         // inefficient version of drain_filter for +stable
         let kept_edges = all_edges
             .into_iter()
-            .filter_map(|x| {
-                if internal_edges.contains(&x) {
-                    None
-                } else {
-                    Some(x)
-                }
-            })
+            .filter(|x| !internal_edges.contains(&x))
             .collect();
         all_edges = kept_edges;
     }
@@ -338,13 +332,7 @@ where
             let mut drained = ahash::AHashMap::<usize, Vertices>::default();
             let mut new_vertices = ahash::AHashMap::<usize, Vertices>::default();
             for (x0, x1) in vertices.into_iter() {
-                if {
-                    if let Some(shape) = x1.shape {
-                        shape == current_shape
-                    } else {
-                        false
-                    }
-                } {
+                if x1.shape.map_or(false, |shape| shape == current_shape) {
                     let _ = drained.insert(x0, x1);
                 } else {
                     let _ = new_vertices.insert(x0, x1);
