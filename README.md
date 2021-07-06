@@ -6,8 +6,6 @@
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
 [![dependency status](https://deps.rs/crate/centerline/0.5.0/status.svg)](https://deps.rs/crate/centerline/0.5.0)
 
-![centerline](img/centerline.gif)
-
 Finds centerlines of closed 2D geometries. It is focused on letter like shapes, i.e. vertex loops with potential enclosed islands of loops.
 Loops directly connected to other loops does not work at the moment. 
 
