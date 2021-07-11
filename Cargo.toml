@@ -1,6 +1,6 @@
 [package]
 name = "centerline"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["eadf"]
 edition = "2018"
 description = "Simple library for finding centerlines of 2D closed geometry"
@@ -24,8 +24,8 @@ num = "0.4"
 ahash = "0.7"
 num-traits = "0.2"
 yabf = {version="0.1",default-features=false}
-boostvoronoi = "0.9"
-linestring = {version="0.6",default-features=false,features=["cgmath", "rayon"]}
+boostvoronoi = "^0.9.1"
+linestring = {version="^0.6.2",default-features=false,features=["cgmath", "rayon"]}
 cgmath = "0.18"
 approx = "0.5"
 thiserror = "1.0"
@@ -44,7 +44,7 @@ name = "cli"
 path = "example/cli.rs"
 
 [dev-dependencies]
-fltk = "1.0"
+fltk = "1.1"
 itertools = "0.10"
 criterion = "0.3"
 
