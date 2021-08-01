@@ -23,9 +23,9 @@ default = []
 num = "0.4"
 ahash = "0.7"
 num-traits = "0.2"
-yabf = {version="0.1",default-features=false}
-boostvoronoi = "^0.9.1"
-linestring = {version="^0.6.2",default-features=false,features=["cgmath", "rayon"]}
+yabf = {version="0.2",default-features=false}
+boostvoronoi = "^0.9.2"
+linestring = {version="^0.6.3",default-features=false,features=["cgmath", "rayon"]}
 cgmath = "0.18"
 approx = "0.5"
 thiserror = "1.0"
