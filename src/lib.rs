@@ -1,9 +1,17 @@
-#![deny(non_camel_case_types)]
-#![deny(unused_parens)]
-#![deny(non_upper_case_globals)]
-#![deny(unused_qualifications)]
-#![deny(unused_results)]
-#![deny(unused_imports)]
+#![deny(
+    rust_2018_compatibility,
+    rust_2018_idioms,
+    nonstandard_style,
+    unused,
+    future_incompatible,
+    non_camel_case_types,
+    unused_parens,
+    non_upper_case_globals,
+    unused_qualifications,
+    unused_results,
+    unused_imports,
+    unused_variables
+)]
 #![cfg_attr(feature = "hash_drain_filter", feature(hash_drain_filter))]
 #![cfg_attr(feature = "map_first_last", feature(map_first_last))]
 
