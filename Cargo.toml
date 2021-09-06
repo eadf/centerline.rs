@@ -1,6 +1,6 @@
 [package]
 name = "centerline"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["eadf"]
 edition = "2018"
 description = "Simple library for finding centerlines of 2D closed geometry"
