@@ -1,10 +1,8 @@
-![toxicblend.rs](img/centerline.png)
-
 [![crates.io](https://img.shields.io/crates/v/centerline.svg)](https://crates.io/crates/centerline)
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.5.2/status.svg)](https://deps.rs/crate/centerline/0.5.2)
+[![dependency status](https://deps.rs/crate/centerline/0.6.0/status.svg)](https://deps.rs/crate/centerline/0.6.0)
 ![license](https://img.shields.io/crates/l/centerline)
 
 Finds centerlines of closed 2D geometries. It is focused on letter like shapes, i.e. vertex loops with potential enclosed islands of loops.
