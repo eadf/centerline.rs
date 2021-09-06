@@ -22,10 +22,10 @@ use boostvoronoi::{InputType, OutputType};
 use cgmath::InnerSpace;
 use cgmath::SquareMatrix;
 use cgmath::Transform;
-use linestring::cgmath_2d;
-use linestring::cgmath_2d::convex_hull;
-use linestring::cgmath_3d;
-use linestring::cgmath_3d::{Line3, LineString3, LineStringSet3};
+use linestring::linestring_2d;
+use linestring::linestring_2d::convex_hull;
+use linestring::linestring_3d;
+use linestring::linestring_3d::{Line3, LineString3, LineStringSet3};
 use ordered_float::OrderedFloat;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
@@ -366,8 +366,8 @@ where
             }
             let mut loops = 0;
 
-            let mut rvs = cgmath_3d::LineStringSet3::<T>::with_capacity(rvi.len());
-            let mut als = cgmath_3d::LineString3::<T>::with_capacity(rvi.len());
+            let mut rvs = linestring_3d::LineStringSet3::<T>::with_capacity(rvi.len());
+            let mut als = linestring_3d::LineString3::<T>::with_capacity(rvi.len());
 
             let started_with: usize = rvi.iter().next().unwrap().1.id;
             let mut prev: usize;
@@ -425,13 +425,13 @@ where
 /// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
 /// maintain numerical precision
 pub fn get_transform<F>(
-    total_aabb: &cgmath_3d::Aabb3<F>,
+    total_aabb: &linestring_3d::Aabb3<F>,
     desired_voronoi_dimension: F,
 ) -> Result<
     (
-        cgmath_3d::Plane,
+        linestring_3d::Plane,
         cgmath::Matrix4<F>,
-        linestring::cgmath_2d::Aabb2<F>,
+        linestring::linestring_2d::Aabb2<F>,
     ),
     CenterlineError,
 >
@@ -453,27 +453,28 @@ where
 /// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
 /// maintain numerical precision
 pub fn get_transform_relaxed<F>(
-    total_aabb: &cgmath_3d::Aabb3<F>,
+    total_aabb: &linestring_3d::Aabb3<F>,
     desired_voronoi_dimension: F,
     epsilon: F,
     max_ulps: u32,
 ) -> Result<
     (
-        cgmath_3d::Plane,
+        linestring_3d::Plane,
         cgmath::Matrix4<F>,
-        linestring::cgmath_2d::Aabb2<F>,
+        linestring::linestring_2d::Aabb2<F>,
     ),
     CenterlineError,
 >
 where
     F: cgmath::BaseFloat + Sync,
 {
-    let plane =
-        if let Some(plane) = cgmath_3d::Plane::get_plane_relaxed(total_aabb, epsilon, max_ulps) {
-            plane
-        } else {
-            return Err(CenterlineError::InputNotPLane);
-        };
+    let plane = if let Some(plane) =
+        linestring_3d::Plane::get_plane_relaxed(total_aabb, epsilon, max_ulps)
+    {
+        plane
+    } else {
+        return Err(CenterlineError::InputNotPLane);
+    };
 
     println!(
         "get_transform_relaxed desired_voronoi_dimension:{:?}",
@@ -527,9 +528,9 @@ where
         let w = cgmath::Vector4::<F>::new(F::zero(), F::zero(), F::zero(), F::one());
 
         match plane {
-            cgmath_3d::Plane::XY => cgmath::Matrix4::from_cols(x, y, z, w),
-            cgmath_3d::Plane::XZ => cgmath::Matrix4::from_cols(x, z, y, w),
-            cgmath_3d::Plane::ZY => cgmath::Matrix4::from_cols(z, y, x, w),
+            linestring_3d::Plane::XY => cgmath::Matrix4::from_cols(x, y, z, w),
+            linestring_3d::Plane::XZ => cgmath::Matrix4::from_cols(x, z, y, w),
+            linestring_3d::Plane::ZY => cgmath::Matrix4::from_cols(z, y, x, w),
         }
     };
 
@@ -555,7 +556,7 @@ where
         center0, low0, high0
     );
     let mut voronoi_input_aabb =
-        linestring::cgmath_2d::Aabb2::new(&cgmath::Point2::new(low0.x, low0.y));
+        linestring::linestring_2d::Aabb2::new(&cgmath::Point2::new(low0.x, low0.y));
     voronoi_input_aabb.update_point(&cgmath::Point2::new(high0.x, high0.y));
 
     println!(
@@ -592,8 +593,8 @@ where
 /// try to consolidate shapes. If one AABB and convex hull (a) totally engulfs another shape (b)
 /// we put shape (b) inside (a)
 pub fn consolidate_shapes<F>(
-    mut raw_data: Vec<linestring::cgmath_2d::LineStringSet2<F>>,
-) -> Result<Vec<linestring::cgmath_2d::LineStringSet2<F>>, CenterlineError>
+    mut raw_data: Vec<linestring::linestring_2d::LineStringSet2<F>>,
+) -> Result<Vec<linestring::linestring_2d::LineStringSet2<F>>, CenterlineError>
 where
     F: cgmath::BaseFloat + Sync,
 {
@@ -606,7 +607,7 @@ where
             for j in i + 1..raw_data.len() {
                 //println!("testing #{} vs #{}", i, j);
                 if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb())
-                    && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
+                    && linestring::linestring_2d::convex_hull::ConvexHull::contains(
                         raw_data[i].get_convex_hull().as_ref().unwrap(),
                         raw_data[j].get_convex_hull().as_ref().unwrap(),
                         F::default_epsilon() * F::from(2.0).unwrap(),
@@ -615,7 +616,7 @@ where
                 {
                     //println!("#{} contains #{}", i, j);
                     // move stuff from j to i via a temp because of borrow checker
-                    let mut stolen_line_j = linestring::cgmath_2d::LineStringSet2::steal_from(
+                    let mut stolen_line_j = linestring::linestring_2d::LineStringSet2::steal_from(
                         raw_data.get_mut(j).unwrap(),
                     );
                     let line_i = raw_data.get_mut(i).unwrap();
@@ -623,7 +624,7 @@ where
                     let _ = raw_data.remove(j);
                     continue 'outer_loop;
                 } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb())
-                    && linestring::cgmath_2d::convex_hull::ConvexHull::contains(
+                    && linestring::linestring_2d::convex_hull::ConvexHull::contains(
                         raw_data[j].get_convex_hull().as_ref().unwrap(),
                         raw_data[i].get_convex_hull().as_ref().unwrap(),
                         F::default_epsilon() * F::from(2.0).unwrap(),
@@ -632,7 +633,7 @@ where
                 {
                     //println!("#{} contains #{}", j, i);
                     // move stuff from i to j via a temp because of borrow checker
-                    let mut stolen_line_i = linestring::cgmath_2d::LineStringSet2::steal_from(
+                    let mut stolen_line_i = linestring::linestring_2d::LineStringSet2::steal_from(
                         raw_data.get_mut(i).unwrap(),
                     );
                     let line_j = raw_data.get_mut(j).unwrap();
@@ -739,8 +740,8 @@ where
         discrete_limit: F,
         ignored_regions: Option<
             &Vec<(
-                linestring::cgmath_2d::Aabb2<F>,
-                linestring::cgmath_2d::LineString2<F>,
+                linestring::linestring_2d::Aabb2<F>,
+                linestring::linestring_2d::LineString2<F>,
             )>,
         >,
     ) -> Result<(), CenterlineError> {
@@ -749,8 +750,8 @@ where
             self.traverse_edges(discrete_limit, ignored_regions)?;
         } else {
             let ignored_regions = Vec::<(
-                linestring::cgmath_2d::Aabb2<F>,
-                linestring::cgmath_2d::LineString2<F>,
+                linestring::linestring_2d::Aabb2<F>,
+                linestring::linestring_2d::LineString2<F>,
             )>::with_capacity(0);
             self.traverse_edges(discrete_limit, &ignored_regions)?;
         }
@@ -766,8 +767,8 @@ where
         discrete_limit: F,
         ignored_regions: Option<
             &Vec<(
-                linestring::cgmath_2d::Aabb2<F>,
-                linestring::cgmath_2d::LineString2<F>,
+                linestring::linestring_2d::Aabb2<F>,
+                linestring::linestring_2d::LineString2<F>,
             )>,
         >,
     ) -> Result<(), CenterlineError> {
@@ -777,8 +778,8 @@ where
             self.traverse_cells(discrete_limit, ignored_regions)?;
         } else {
             let ignored_regions = Vec::<(
-                linestring::cgmath_2d::Aabb2<F>,
-                linestring::cgmath_2d::LineString2<F>,
+                linestring::linestring_2d::Aabb2<F>,
+                linestring::linestring_2d::LineString2<F>,
             )>::with_capacity(0);
             self.traverse_cells(discrete_limit, &ignored_regions)?;
         }
@@ -1053,14 +1054,14 @@ where
         &self,
         edges: &yabf::Yabf,
         ignored_regions: &[(
-            linestring::cgmath_2d::Aabb2<F>,
-            linestring::cgmath_2d::LineString2<F>,
+            linestring::linestring_2d::Aabb2<F>,
+            linestring::linestring_2d::LineString2<F>,
         )],
     ) -> Result<bool, CenterlineError> {
         let is_inside_region = |edge: VD::EdgeIndex,
                                 region: &(
-            linestring::cgmath_2d::Aabb2<F>,
-            linestring::cgmath_2d::LineString2<F>,
+            linestring::linestring_2d::Aabb2<F>,
+            linestring::linestring_2d::LineString2<F>,
         )|
          -> Result<bool, CenterlineError> {
             let v0 = self.diagram.edge_get_vertex0(edge)?.unwrap();
@@ -1100,8 +1101,8 @@ where
         &mut self,
         maxdist: F,
         ignored_regions: &[(
-            linestring::cgmath_2d::Aabb2<F>,
-            linestring::cgmath_2d::LineString2<F>,
+            linestring::linestring_2d::Aabb2<F>,
+            linestring::linestring_2d::LineString2<F>,
         )],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
@@ -1228,8 +1229,8 @@ where
         &mut self,
         maxdist: F,
         ignored_regions: &[(
-            linestring::cgmath_2d::Aabb2<F>,
-            linestring::cgmath_2d::LineString2<F>,
+            linestring::linestring_2d::Aabb2<F>,
+            linestring::linestring_2d::LineString2<F>,
         )],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
@@ -1587,11 +1588,11 @@ where
                 let edge_id = edges.first().unwrap();
                 let edge = self.diagram.edge_get(*edge_id)?;
                 match self.convert_edge_to_shape(edge) {
-                    Ok(cgmath_3d::Shape3d::Line(l)) => lines.push(l),
-                    Ok(cgmath_3d::Shape3d::ParabolicArc(a)) => {
+                    Ok(linestring_3d::Shape3d::Line(l)) => lines.push(l),
+                    Ok(linestring_3d::Shape3d::ParabolicArc(a)) => {
                         linestrings.push(a.discretise_3d(maxdist));
                     }
-                    Ok(cgmath_3d::Shape3d::Linestring(_s)) => {
+                    Ok(linestring_3d::Shape3d::Linestring(_s)) => {
                         panic!();
                     }
                     Err(_) => {
@@ -1604,19 +1605,19 @@ where
                 for edge_id in edges.iter() {
                     let edge = self.diagram.edge_get(*edge_id)?;
                     match self.convert_edge_to_shape(edge)? {
-                        cgmath_3d::Shape3d::Line(l) => {
+                        linestring_3d::Shape3d::Line(l) => {
                             //println!("->got {:?}", l);
                             ls.push(l.start);
                             ls.push(l.end);
                             //println!("<-got");
                         }
-                        cgmath_3d::Shape3d::ParabolicArc(a) => {
+                        linestring_3d::Shape3d::ParabolicArc(a) => {
                             //println!("->got {:?}", a);
                             ls.append(a.discretise_3d(maxdist));
                             //println!("<-got");
                         }
                         // should not happen
-                        cgmath_3d::Shape3d::Linestring(_s) => {
+                        linestring_3d::Shape3d::Linestring(_s) => {
                             return Err(CenterlineError::InternalError(format!(
                                 "convert_edges_to_lines() got an unexpected linestring. {}:{}",
                                 file!(),
@@ -1635,7 +1636,7 @@ where
     fn convert_edge_to_shape(
         &self,
         edge: &VD::Edge<I, F>,
-    ) -> Result<cgmath_3d::Shape3d<F>, CenterlineError> {
+    ) -> Result<linestring_3d::Shape3d<F>, CenterlineError> {
         let edge_id = edge.id();
         let edge_twin_id = self.diagram.edge_get_twin(edge_id)?;
 
@@ -1724,8 +1725,8 @@ where
         }
 
         if edge.is_curved() {
-            let arc = cgmath_2d::VoronoiParabolicArc::new(
-                cgmath_2d::Line2 {
+            let arc = linestring_2d::VoronoiParabolicArc::new(
+                linestring_2d::Line2 {
                     start: segment_start_point,
                     end: segment_end_point,
                 },
@@ -1735,7 +1736,7 @@ where
             );
             #[cfg(feature = "console_debug")]
             println!("Converted {:?} to {:?}", edge.get_id().0, arc);
-            Ok(cgmath_3d::Shape3d::ParabolicArc(arc))
+            Ok(linestring_3d::Shape3d::ParabolicArc(arc))
         } else {
             let distance_to_start = {
                 if vertex0.is_site_point() {
@@ -1746,7 +1747,7 @@ where
                         x: Self::i2f(cell_point.x),
                         y: Self::i2f(cell_point.y),
                     };
-                    -linestring::cgmath_2d::distance_to_point_squared(&cell_point, &start_point)
+                    -linestring::linestring_2d::distance_to_point_squared(&cell_point, &start_point)
                         .sqrt()
                 } else {
                     let segment = self.retrieve_segment(cell_id)?;
@@ -1758,7 +1759,7 @@ where
                         x: Self::i2f(segment.end.x),
                         y: Self::i2f(segment.end.y),
                     };
-                    -linestring::cgmath_2d::distance_to_line_squared_safe(
+                    -linestring::linestring_2d::distance_to_line_squared_safe(
                         &segment_start_point,
                         &segment_end_point,
                         &start_point,
@@ -1782,8 +1783,11 @@ where
                             x: Self::i2f(cell_point.x),
                             y: Self::i2f(cell_point.y),
                         };
-                        -linestring::cgmath_2d::distance_to_point_squared(&cell_point, &end_point)
-                            .sqrt()
+                        -linestring::linestring_2d::distance_to_point_squared(
+                            &cell_point,
+                            &end_point,
+                        )
+                        .sqrt()
                     } else {
                         let segment = self.retrieve_segment(cell_id)?;
                         let segment_start_point = cgmath::Point2 {
@@ -1794,7 +1798,7 @@ where
                             x: Self::i2f(segment.end.x),
                             y: Self::i2f(segment.end.y),
                         };
-                        -linestring::cgmath_2d::distance_to_line_squared_safe(
+                        -linestring::linestring_2d::distance_to_line_squared_safe(
                             &segment_start_point,
                             &segment_end_point,
                             &end_point,
@@ -1817,7 +1821,7 @@ where
             };
             #[cfg(feature = "console_debug")]
             println!("Converted {:?} to {:?}", edge.get_id().0, line);
-            Ok(cgmath_3d::Shape3d::Line(line))
+            Ok(linestring_3d::Shape3d::Line(line))
         }
     }
 

@@ -62,9 +62,9 @@ use fltk::dialog::FileDialogType;
 use fltk::menu::MenuButton;
 #[allow(unused_imports)]
 use itertools::Itertools;
-use linestring::cgmath_2d::{Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
-use linestring::cgmath_3d;
-use linestring::cgmath_3d::LineString3;
+use linestring::linestring_2d::{Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
+use linestring::linestring_3d;
+use linestring::linestring_3d::LineString3;
 use num::traits::FloatConst;
 use rayon::prelude::*;
 use std::cell::{RefCell, RefMut};
@@ -588,7 +588,7 @@ fn main() -> Result<(), CenterlineError> {
                     if let Some(filename) = chooser.filenames().first() {
                         let shared_data_c = Rc::clone(&shared_data_rc);
                         let shared_data_b = shared_data_c.borrow();
-                        let mut data_to_save = Vec::<Vec<cgmath_3d::Line3<F>>>::new();
+                        let mut data_to_save = Vec::<Vec<linestring_3d::Line3<F>>>::new();
                         for s in shared_data_b.shapes.iter().flatten() {
                             if let Some(ref centerline) = s.centerline {
                                 data_to_save.push(
@@ -602,7 +602,7 @@ fn main() -> Result<(), CenterlineError> {
                                                 l.end.x as F,
                                                 l.end.y as F,
                                             ])
-                                            .copy_to_3d(cgmath_3d::Plane::XY)
+                                            .copy_to_3d(linestring_3d::Plane::XY)
                                             .transform(
                                                 &shared_data_b.configuration.inverse_transform,
                                             )
@@ -611,7 +611,7 @@ fn main() -> Result<(), CenterlineError> {
                                 );
                             }
                         }
-                        if let Err(err) = linestring::cgmath_3d::save_to_obj_file(
+                        if let Err(err) = linestring::linestring_3d::save_to_obj_file(
                             filename.to_str().unwrap(),
                             "outline",
                             data_to_save,
@@ -631,7 +631,7 @@ fn main() -> Result<(), CenterlineError> {
                     if let Some(filename) = chooser.filenames().first() {
                         let shared_data_c = Rc::clone(&shared_data_rc);
                         let shared_data_b = shared_data_c.borrow();
-                        let mut data_to_save = Vec::<Vec<cgmath_3d::Line3<F>>>::new();
+                        let mut data_to_save = Vec::<Vec<linestring_3d::Line3<F>>>::new();
                         for s in shared_data_b.shapes.iter().flatten() {
                             for r in s.centerline.iter() {
                                 for ls in r.line_strings.iter().flatten() {
@@ -649,7 +649,7 @@ fn main() -> Result<(), CenterlineError> {
                                 }
                             }
                         }
-                        if let Err(err) = linestring::cgmath_3d::save_to_obj_file(
+                        if let Err(err) = linestring::linestring_3d::save_to_obj_file(
                             filename.to_str().unwrap(),
                             "centerline",
                             data_to_save,
@@ -893,7 +893,7 @@ fn add_data_from_file(
 
     let lines = centerline::remove_internal_edges(obj_set)?;
     let lines = centerline::divide_into_shapes(lines.0, lines.1)?;
-    let mut total_aabb = cgmath_3d::Aabb3::<f32>::default();
+    let mut total_aabb = linestring_3d::Aabb3::<f32>::default();
     for l in lines.iter() {
         total_aabb.update_aabb(l.get_aabb());
     }
@@ -912,7 +912,7 @@ fn add_data_from_file(
     // transform each linestring to 2d
     let mut raw_data: Vec<LineStringSet2<F>> = lines
         .par_iter()
-        .map(|x| x.transform(&transform).copy_to_2d(cgmath_3d::Plane::XY))
+        .map(|x| x.transform(&transform).copy_to_2d(linestring_3d::Plane::XY))
         .collect();
     {
         let truncate_float = |x: F| -> F { x as I as F };
