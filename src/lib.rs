@@ -130,7 +130,7 @@ fn paint_every_connected_vertex(
     Ok(())
 }
 
-#[cfg(feature = "impl-wavefront")]
+#[cfg(feature = "obj-rs")]
 #[allow(clippy::type_complexity)]
 /// Remove internal edges from a wavefront-obj object
 /// This requires the feature "impl-wavefront" to be active.

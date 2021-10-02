@@ -5,7 +5,9 @@
 [![dependency status](https://deps.rs/crate/centerline/0.6.1/status.svg)](https://deps.rs/crate/centerline/0.6.1)
 ![license](https://img.shields.io/crates/l/centerline)
 
-Finds centerlines of closed 2D geometries. It is focused on letter like shapes, i.e. vertex loops with potential enclosed islands of loops.
+This 💩 crate finds centerlines, aka the median axis, of closed 2D geometries.
+
+It is focused on letter like shapes, i.e. vertex loops with potential enclosed islands of loops.
 Loops directly connected to other loops does not work at the moment. 
 
 It uses a [segmented voronoi diagram](https://crates.io/crates/boostvoronoi) as a base, then it filters out the 
@@ -35,7 +37,7 @@ println!(
 ## Gui example
 
 ```fish
-cargo run --example fltk_gui --features=impl-wavefront --release"
+cargo run --example fltk_gui --features=obj-rs --release"
 ```
 The example only displays 2D, but the generated center-line is actually 3D line segments.\
 The Z coordinate is the distance between the 2D center-line, and the geometry that created it. 

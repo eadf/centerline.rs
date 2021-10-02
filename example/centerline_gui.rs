@@ -72,7 +72,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
 
-// this requires the "impl-wavefront" feature to be active
+// this requires the "obj-rs" feature to be active
 use obj;
 
 #[macro_use]
