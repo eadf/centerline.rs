@@ -81,6 +81,33 @@ bitflags! {
     }
 }
 
+pub trait GrowingVob {
+    fn fill(initial_size: usize) -> Vob32;
+    fn set_grow(&mut self, bit: usize, state: bool) -> bool;
+    /// get with default value: false
+    fn get_f(&self, bit: usize) -> bool;
+}
+type Vob32 = vob::Vob<u32>;
+
+impl GrowingVob for Vob32 {
+    fn fill(initial_size: usize) -> Self {
+        let mut v: Vob32 = Vob32::new_with_storage_type(0);
+        v.resize(initial_size, false);
+        v
+    }
+    #[inline]
+    fn set_grow(&mut self, bit: usize, state: bool) -> bool {
+        if bit >= self.len() {
+            self.resize(bit + 512, false);
+        }
+        self.set(bit, state)
+    }
+    #[inline]
+    fn get_f(&self, bit: usize) -> bool {
+        self.get(bit).unwrap_or(false)
+    }
+}
+
 #[derive(Debug)]
 struct Vertices {
     id: usize,                      // index into the point3 list
@@ -91,7 +118,7 @@ struct Vertices {
 /// paints every connected vertex with the
 fn paint_every_connected_vertex(
     vertices: &mut ahash::AHashMap<usize, Vertices>,
-    already_painted: &mut yabf::Yabf,
+    already_painted: &mut Vob32,
     vertex_id: usize,
     color: usize,
 ) -> Result<(), CenterlineError> {
@@ -101,20 +128,20 @@ fn paint_every_connected_vertex(
     while !queue.is_empty() {
         // unwrap is safe here, we just checked that there are item in the queue
         let current_vertex = queue.pop_front().unwrap();
-        if already_painted.bit(current_vertex) {
+        if already_painted.get_f(current_vertex) {
             continue;
         }
 
         if let Some(vertex_obj) = vertices.get_mut(&current_vertex) {
             if vertex_obj.shape.is_none() {
                 vertex_obj.shape = Some(color);
-                already_painted.set_bit(current_vertex, true);
+                let _ = already_painted.set(current_vertex, true);
             } else {
                 // already painted for some reason
                 continue;
             }
             for v in vertex_obj.connected_vertices.iter() {
-                if !already_painted.bit(*v) {
+                if !already_painted.get_f(*v) {
                     queue.push_back(*v);
                 }
             }
@@ -283,9 +310,9 @@ where
     // Do a search on one vertex, paint all connected vertices with the same number.
     let mut unique_shape_id_generator = 0..usize::MAX;
 
-    let mut already_painted = yabf::Yabf::with_capacity(vertices.len());
+    let mut already_painted = Vob32::fill(vertices.len());
     for vertex_id in 0..vertices.len() {
-        if already_painted.bit(vertex_id) {
+        if already_painted.get_f(vertex_id) {
             continue;
         }
 
@@ -668,9 +695,9 @@ where
     pub line_strings: Option<Vec<LineString3<F>>>,
 
     /// bit field defining edges rejected by EXTERNAL or INFINITE
-    rejected_edges: Option<yabf::Yabf>,
+    rejected_edges: Option<Vob32>,
     /// bit field defining edges rejected by 'rejected_edges' + dot test
-    ignored_edges: Option<yabf::Yabf>,
+    ignored_edges: Option<Vob32>,
 
     #[cfg(feature = "console_debug")]
     pub debug_edges: Option<ahash::AHashMap<usize, [F; 4]>>,
@@ -787,12 +814,12 @@ where
     }
 
     /// returns a copy of the ignored edges bit field
-    pub fn ignored_edges(&self) -> Option<yabf::Yabf> {
+    pub fn ignored_edges(&self) -> Option<Vob32> {
         self.ignored_edges.to_owned()
     }
 
     /// returns a copy of the rejected edges bit field
-    pub fn rejected_edges(&self) -> Option<yabf::Yabf> {
+    pub fn rejected_edges(&self) -> Option<Vob32> {
         self.rejected_edges.to_owned()
     }
 
@@ -825,24 +852,22 @@ where
 
     /// Mark infinite edges and their adjacent edges as EXTERNAL.
     fn reject_external_edges(&mut self) -> Result<(), CenterlineError> {
-        let mut rejected_edges = yabf::Yabf::default();
-        // ensure capacity of bit field by setting last bit +1 to true
-        rejected_edges.set_bit(self.diagram().edges().len(), true);
+        let mut rejected_edges = Vob32::fill(self.diagram.edges().len());
 
         for edge in self.diagram.edges().iter() {
             let edge_id = edge.id();
             if edge.is_secondary() {
-                rejected_edges.set_bit(edge_id.0, true);
+                let _ = rejected_edges.set(edge_id.0, true);
                 //self.diagram
                 //    .edge_or_color(edge_id, ColorFlag::SECONDARY.bits)?;
                 let twin_id = self.diagram.edge_get_twin(edge_id)?;
                 //self.diagram
                 //    .edge_or_color(twin_id, ColorFlag::SECONDARY.bits);
-                rejected_edges.set_bit(twin_id.0, true);
+                let _ = rejected_edges.set(twin_id.0, true);
             }
             if !self.diagram.edge_is_finite(edge_id)? {
                 self.mark_connected_edges(edge_id, &mut rejected_edges, true)?;
-                rejected_edges.set_bit(edge_id.0, true);
+                let _ = rejected_edges.set(edge_id.0, true);
             }
         }
 
@@ -883,7 +908,7 @@ where
                 loop {
                     e = self.diagram.edge_get_next(e)?;
 
-                    if !ignored_edges.bit(e.0) {
+                    if !ignored_edges.get_f(e.0) {
                         // all infinite edges should be rejected at this point, so
                         // all edges should contain a vertex0 and vertex1
 
@@ -954,7 +979,7 @@ where
     fn angle_test_6(
         &self,
         cos_angle: F,
-        ignored_edges: &mut yabf::Yabf,
+        ignored_edges: &mut Vob32,
         edge_id: VD::EdgeIndex,
         vertex0: &cgmath::Point2<F>,
         vertex1: &cgmath::Point2<F>,
@@ -967,8 +992,8 @@ where
             let vertex_v = (vertex1 - vertex0).normalize();
             if segment_v.dot(vertex_v).abs() < cos_angle {
                 let twin = self.diagram.edge_get_twin(edge_id)?;
-                ignored_edges.set_bit(twin.0, true);
-                ignored_edges.set_bit(edge_id.0, true);
+                let _ = ignored_edges.set(twin.0, true);
+                let _ = ignored_edges.set(edge_id.0, true);
                 return Ok(true);
             }
         }
@@ -982,10 +1007,10 @@ where
     fn mark_connected_edges(
         &self,
         edge_id: VD::EdgeIndex,
-        marked_edges: &mut yabf::Yabf,
+        marked_edges: &mut Vob32,
         initial: bool,
     ) -> Result<(), CenterlineError> {
-        if marked_edges.bit(edge_id.0) {
+        if marked_edges.get_f(edge_id.0) {
             return Ok(());
         }
 
@@ -996,7 +1021,7 @@ where
         'outer: while !queue.is_empty() {
             // unwrap is safe since we just checked !queue.is_empty()
             let edge_id = queue.pop_front().unwrap();
-            if marked_edges.bit(edge_id.0) {
+            if marked_edges.get_f(edge_id.0) {
                 initial = false;
                 continue 'outer;
             }
@@ -1004,18 +1029,18 @@ where
             let v1 = self.diagram.edge_get_vertex1(edge_id)?;
             if self.diagram.edge_get_vertex0(edge_id)?.is_some() && v1.is_none() {
                 // this edge leads to nowhere, stop following line
-                marked_edges.set_bit(edge_id.0, true);
+                let _ = marked_edges.set(edge_id.0, true);
                 initial = false;
                 continue 'outer;
             }
-            marked_edges.set_bit(edge_id.0, true);
+            let _ = marked_edges.set(edge_id.0, true);
 
             #[allow(unused_assignments)]
             if initial {
                 initial = false;
                 queue.push_back(self.diagram.edge_get_twin(edge_id)?);
             } else {
-                marked_edges.set_bit(self.diagram.edge_get_twin(edge_id)?.0, true);
+                let _ = marked_edges.set(self.diagram.edge_get_twin(edge_id)?.0, true);
             }
 
             if v1.is_none() || !self.diagram.edge_get(edge_id)?.is_primary() {
@@ -1035,7 +1060,7 @@ where
                 let mut this_edge = v1.get_incident_edge()?;
                 let v_incident_edge = this_edge;
                 loop {
-                    if !marked_edges.bit(this_edge.0) {
+                    if !marked_edges.get_f(this_edge.0) {
                         queue.push_back(this_edge);
                     }
                     this_edge = self.diagram.edge_rot_next(this_edge)?;
@@ -1052,7 +1077,7 @@ where
     /// returns true if *all* of the 'edges' are contained inside one of the 'ignored_regions'
     fn edges_are_inside_ignored_region(
         &self,
-        edges: &yabf::Yabf,
+        edges: &Vob32,
         ignored_regions: &[(
             linestring::linestring_2d::Aabb2<F>,
             linestring::linestring_2d::LineString2<F>,
@@ -1084,7 +1109,7 @@ where
         };
 
         'outer: for region in ignored_regions.iter().enumerate() {
-            for edge in edges.into_iter() {
+            for edge in edges.iter_set_bits(..) {
                 if !is_inside_region(VD::EdgeIndex(edge), region.1)? {
                     //println!("edge: {:?} is not inside region {}, skipping", edge, region.0);
                     continue 'outer;
@@ -1124,7 +1149,7 @@ where
         let mut ignored_edges = self
             .ignored_edges
             .take()
-            .unwrap_or_else(|| yabf::Yabf::with_capacity(0));
+            .unwrap_or_else(|| Vob32::fill(self.diagram.edges().len()));
 
         #[cfg(feature = "console_debug")]
         let mut edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
@@ -1134,23 +1159,23 @@ where
 
         if !ignored_regions.is_empty() {
             // find the groups of connected edges in this shape
-            let mut searched_edges_v = Vec::<yabf::Yabf>::new();
+            let mut searched_edges_v = Vec::<Vob32>::new();
             let mut searched_edges_s = ignored_edges.clone();
             for it in self.diagram.edges().iter().enumerate() {
                 // can not use iter().filter() because of the borrow checker
-                if searched_edges_s.bit(it.0) {
+                if searched_edges_s.get_f(it.0) {
                     continue;
                 }
-                let mut edges = yabf::Yabf::with_capacity(self.diagram.edges().len());
+                let mut edges = Vob32::fill(self.diagram.edges().len());
                 self.mark_connected_edges(VD::EdgeIndex(it.0), &mut edges, true)?;
-                searched_edges_s |= &edges;
+                let _ = searched_edges_s.or(&edges);
                 searched_edges_v.push(edges);
             }
 
             for edges in searched_edges_v.iter() {
                 if self.edges_are_inside_ignored_region(edges, ignored_regions)? {
                     //println!("edges: are inside ignored region {:?}", edges);
-                    ignored_edges |= edges;
+                    let _ = ignored_edges.or(edges);
                     continue;
                 } else {
                     //println!("edges: are NOT inside ignored regions {:?}", edges);
@@ -1163,7 +1188,7 @@ where
 
         for it in self.diagram.edges().iter().enumerate() {
             // can not use iter().filter() because of the borrow checker
-            if used_edges.bit(it.0) {
+            if used_edges.get_f(it.0) {
                 continue;
             }
             let edge_id = VD::EdgeIndex(it.0);
@@ -1182,7 +1207,7 @@ where
         // loop over each edge again, make sure they were all used or properly ignored.
         for it in self.diagram.edges().iter().enumerate() {
             // can not use iter().filter() because of the borrow checker
-            if used_edges.bit(it.0) {
+            if used_edges.get_f(it.0) {
                 continue;
             }
             let edge_id = VD::EdgeIndex(it.0);
@@ -1249,10 +1274,7 @@ where
             ))
         })?;
 
-        let mut ignored_edges = self
-            .ignored_edges
-            .take()
-            .unwrap_or_else(|| yabf::Yabf::with_capacity(0));
+        let mut ignored_edges = self.ignored_edges.take().unwrap_or_else(|| Vob32::fill(0));
 
         #[cfg(feature = "console_debug")]
         let mut edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
@@ -1262,23 +1284,23 @@ where
 
         if !ignored_regions.is_empty() {
             // find the groups of connected edges in this shape
-            let mut searched_edges_v = Vec::<yabf::Yabf>::new();
+            let mut searched_edges_v = Vec::<Vob32>::new();
             let mut searched_edges_s = ignored_edges.clone();
             for it in self.diagram.edges().iter().enumerate() {
                 // can not use iter().filter() because of the borrow checker
-                if searched_edges_s.bit(it.0) {
+                if searched_edges_s.get_f(it.0) {
                     continue;
                 }
-                let mut edges = yabf::Yabf::with_capacity(self.diagram.edges().len());
+                let mut edges = Vob32::fill(self.diagram.edges().len());
                 self.mark_connected_edges(VD::EdgeIndex(it.0), &mut edges, true)?;
-                searched_edges_s |= &edges;
+                let _ = searched_edges_s.or(&edges);
                 searched_edges_v.push(edges);
             }
 
             for edges in searched_edges_v.iter() {
                 if self.edges_are_inside_ignored_region(edges, ignored_regions)? {
                     //println!("edges: are inside ignored region {:?}", edges);
-                    ignored_edges |= edges;
+                    let _ = ignored_edges.or(edges);
                     continue;
                 } else {
                     //println!("edges: are NOT inside ignored regions {:?}", edges);
@@ -1291,7 +1313,7 @@ where
 
         for it in self.diagram.edges().iter().enumerate() {
             // can not use iter().filter() because of the borrow checker
-            if used_edges.bit(it.0) {
+            if used_edges.get_f(it.0) {
                 continue;
             }
             let edge_id = VD::EdgeIndex(it.0);
@@ -1310,7 +1332,7 @@ where
         // loop over each edge again, make sure they were all used or properly ignored.
         for it in self.diagram.edges().iter().enumerate() {
             // can not use iter().filter() because of the borrow checker
-            if used_edges.bit(it.0) {
+            if used_edges.get_f(it.0) {
                 continue;
             }
             let edge_id = VD::EdgeIndex(it.0);
@@ -1357,19 +1379,19 @@ where
     fn mark_edge_and_twin_as_used(
         &self,
         edge_id: VD::EdgeIndex,
-        used_edges: &mut yabf::Yabf,
+        used_edges: &mut Vob32,
     ) -> Result<(), CenterlineError> {
-        used_edges.set_bit(edge_id.0, true);
+        let _ = used_edges.set(edge_id.0, true);
         #[cfg(feature = "console_debug")]
         print!("marking {}", edge_id.0);
         {
             let twin = self.diagram.edge_get_twin(edge_id)?;
             #[cfg(feature = "console_debug")]
             print!(" & {}", twin.0);
-            if used_edges.bit(twin.0) {
+            if used_edges.get_f(twin.0) {
                 eprintln!(" TWIN was already used!!!!! edge id:{}", twin.0);
             }
-            used_edges.set_bit(twin.0, true);
+            let _ = used_edges.set(twin.0, true);
         }
         Ok(())
     }
@@ -1384,8 +1406,8 @@ where
         &self,
         seed_edge: VD::EdgeIndex,
         force_seed_edge: bool,
-        ignored_edges: &yabf::Yabf,
-        used_edges: &mut yabf::Yabf,
+        ignored_edges: &Vob32,
+        used_edges: &mut Vob32,
         lines: &mut Vec<Line3<F>>,
         linestrings: &mut Vec<LineString3<F>>,
         maxdist: F,
@@ -1402,7 +1424,7 @@ where
             || self
                 .diagram
                 .edge_rot_next_iterator(seed_edge)
-                .filter(|x| !ignored_edges.bit(x.0))
+                .filter(|x| !ignored_edges.get_f(x.0))
                 .take(2) // we do not need more than 2 for the test
                 .count()
                 == 1;
@@ -1415,7 +1437,7 @@ where
                 println!();
                 let edge = start_points.pop_front().unwrap();
 
-                if ignored_edges.bit(edge.0) {
+                if ignored_edges.get_f(edge.0) {
                     // Should never happen
                     return Err(CenterlineError::InternalError(format!(
                         "should never happen: edge {} already in ignore list. {}:{}",
@@ -1424,7 +1446,7 @@ where
                         line!()
                     )));
                 }
-                if used_edges.bit(edge.0) {
+                if used_edges.get_f(edge.0) {
                     #[cfg(feature = "console_debug")]
                     print!(" skip");
                     // edge was already processed, continue
@@ -1445,7 +1467,7 @@ where
                     let next_edges: Vec<VD::EdgeIndex> = self
                         .diagram
                         .edge_rot_next_iterator(next_edge)
-                        .filter(|x| !ignored_edges.bit(x.0))
+                        .filter(|x| !ignored_edges.get_f(x.0))
                         .collect();
 
                     #[cfg(feature = "console_debug")]
@@ -1464,7 +1486,7 @@ where
                         1 | 2 => {
                             let next_edges: Vec<VD::EdgeIndex> = next_edges
                                 .into_iter()
-                                .filter(|x| !used_edges.bit(x.0))
+                                .filter(|x| !used_edges.get_f(x.0))
                                 .collect();
                             if next_edges.len() == 1 {
                                 // continue walking the edge line
@@ -1489,7 +1511,7 @@ where
                                     #[cfg(feature = "console_debug")]
                                     print!("1|2 Pushing new start points: [");
                                     for e in next_edges.iter() {
-                                        if !ignored_edges.bit(e.0) && !used_edges.bit(e.0) {
+                                        if !ignored_edges.get_f(e.0) && !used_edges.get_f(e.0) {
                                             #[cfg(feature = "console_debug")]
                                             print!("{},", e.0);
                                             start_points.push_back(*e);
@@ -1517,7 +1539,7 @@ where
                                 #[cfg(feature = "console_debug")]
                                 print!("0|_ Pushing new start points: [");
                                 for e in next_edges.iter() {
-                                    if !ignored_edges.bit(e.0) && !used_edges.bit(e.0) {
+                                    if !ignored_edges.get_f(e.0) && !used_edges.get_f(e.0) {
                                         #[cfg(feature = "console_debug")]
                                         print!("{},", e.0);
                                         start_points.push_back(*e);

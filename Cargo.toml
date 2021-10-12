@@ -22,7 +22,7 @@ default = []
 num = "0.4"
 ahash = "0.7"
 num-traits = "0.2"
-yabf = {version="0.2",default-features=false}
+vob = "3.0"
 boostvoronoi = "^0.9.2"
 linestring = "0.7"
 cgmath = "0.18"
@@ -30,7 +30,7 @@ approx = "0.5"
 thiserror = "1.0"
 rayon = "1.5"
 bitflags = "1.2"
-ordered-float = "2.5"
+ordered-float = "2.8"
 obj-rs = { version = "0.7", optional = true }
 
 [[example]]
@@ -43,7 +43,7 @@ name = "cli"
 path = "example/cli.rs"
 
 [dev-dependencies]
-fltk = "1.1"
+fltk = "1.2"
 itertools = "0.10"
 criterion = "0.3"
 

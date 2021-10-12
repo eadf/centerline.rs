@@ -1,5 +1,5 @@
 use boostvoronoi::builder as VB;
-use centerline::{Centerline, CenterlineError};
+use centerline::{Centerline, CenterlineError, GrowingVob};
 
 fn main() -> Result<(), CenterlineError> {
     let _test_segments: [[i32; 4]; 12] = [
@@ -33,15 +33,15 @@ fn main() -> Result<(), CenterlineError> {
         .edges()
         .iter()
         .enumerate()
-        .filter(|(i, _)| !rejected_edges.bit(*i))
+        .filter(|(i, _)| !rejected_edges.get_f(*i))
     {
         let twin = centerline.diagram().edge_get(e.id())?.twin();
-        let twin_i: Vec<bool> = twin.iter().map(|x| rejected_edges.bit(x.0)).collect();
+        let twin_i: Vec<bool> = twin.iter().map(|x| rejected_edges.get_f(x.0)).collect();
         print!(
             "edge#{} {:?} {} {:?} {:?}",
             eid,
             e,
-            rejected_edges.bit(eid),
+            rejected_edges.get_f(eid),
             twin,
             twin_i.first()
         );

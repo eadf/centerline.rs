@@ -129,7 +129,6 @@ struct Shape {
 
 #[derive(Debug, Clone, Copy)]
 struct Configuration {
-    window_center: (i32, i32),
     input_distance: F,
     input_distance_dirty: bool,
     centerline_distance: F,
@@ -221,7 +220,6 @@ fn main() -> Result<(), CenterlineError> {
     let shared_data_rc = Rc::new(RefCell::new(SharedData {
         shapes: None,
         configuration: Configuration {
-            window_center: (WF / 2, HF / 2),
             centerline_distance: 0.0,
             centerline_scaled_distance: 256.0,
             centerline_distance_dirty: true,
