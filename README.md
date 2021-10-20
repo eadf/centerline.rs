@@ -5,7 +5,7 @@
 [![dependency status](https://deps.rs/crate/centerline/0.6.1/status.svg)](https://deps.rs/crate/centerline/0.6.1)
 ![license](https://img.shields.io/crates/l/centerline)
 
-This 💩 crate finds centerlines, aka the median axis, of closed 2D geometries.
+This simple library tries to find centerlines, aka the median-axis, of closed 2D geometries.
 
 It is focused on letter like shapes, i.e. vertex loops with potential enclosed islands of loops.
 Loops directly connected to other loops does not work at the moment. 

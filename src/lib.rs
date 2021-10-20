@@ -81,27 +81,33 @@ bitflags! {
     }
 }
 
-pub trait GrowingVob {
-    fn fill(initial_size: usize) -> Vob32;
-    fn set_grow(&mut self, bit: usize, state: bool) -> bool;
-    /// get with default value: false
-    fn get_f(&self, bit: usize) -> bool;
-}
 type Vob32 = vob::Vob<u32>;
 
-impl GrowingVob for Vob32 {
+pub trait GrowingVob {
+    /// Will create a new Vob and fill it with `false`
+    fn fill(initial_size: usize) -> Self;
+    /// Conditionally grow to fit required size, set ´bit´ to ´state´ value
+    fn set_grow(&mut self, bit: usize, state: bool);
+    /// get() with default value `false`
+    fn get_f(&self, bit: usize) -> bool;
+}
+
+impl<T: num_traits::PrimInt + std::fmt::Debug> GrowingVob for vob::Vob<T> {
+    #[inline]
     fn fill(initial_size: usize) -> Self {
-        let mut v: Vob32 = Vob32::new_with_storage_type(0);
+        let mut v = Self::new_with_storage_type(0);
         v.resize(initial_size, false);
         v
     }
+
     #[inline]
-    fn set_grow(&mut self, bit: usize, state: bool) -> bool {
+    fn set_grow(&mut self, bit: usize, state: bool) {
         if bit >= self.len() {
-            self.resize(bit + 512, false);
+            self.resize(bit + std::mem::size_of::<T>(), false);
         }
-        self.set(bit, state)
+        let _ = self.set(bit, state);
     }
+
     #[inline]
     fn get_f(&self, bit: usize) -> bool {
         self.get(bit).unwrap_or(false)
@@ -754,7 +760,7 @@ where
         println!(
             "build_voronoi()-> Rejected edges:{:?} {}",
             self.rejected_edges.as_ref(),
-            &self.rejected_edges.as_ref().unwrap().bit(0)
+            &self.rejected_edges.as_ref().unwrap().get_f(0)
         );
         Ok(())
     }
@@ -1152,7 +1158,7 @@ where
             .unwrap_or_else(|| Vob32::fill(self.diagram.edges().len()));
 
         #[cfg(feature = "console_debug")]
-        let mut edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
+        let edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
 
         linestrings.clear();
         lines.clear();
@@ -1232,10 +1238,7 @@ where
         {
             println!("Got {} single lines", lines.len());
             println!("Got {} linestrings", linestrings.len());
-            println!(
-                "self.ignored_edges {:?}",
-                self.ignored_edges.clone().unwrap()
-            );
+            println!("self.ignored_edges {:?}", self.ignored_edges);
             println!("     ignored_edges {:?}", ignored_edges);
             println!("        used_edges {:?}", used_edges);
         }
@@ -1277,7 +1280,7 @@ where
         let mut ignored_edges = self.ignored_edges.take().unwrap_or_else(|| Vob32::fill(0));
 
         #[cfg(feature = "console_debug")]
-        let mut edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
+        let edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
 
         linestrings.clear();
         lines.clear();
@@ -1461,7 +1464,7 @@ where
                 let mut next_edge = self.diagram.edge_get(edge)?.next()?;
                 loop {
                     #[cfg(feature = "console_debug")]
-                    print!("Inner loop next_edge={} ", next_edge.unwrap().0);
+                    print!("Inner loop next_edge={} ", next_edge.0);
 
                     // it does not matter if next_edge is rejected/valid, it will be fixed by the iterator
                     let next_edges: Vec<VD::EdgeIndex> = self
@@ -1475,7 +1478,7 @@ where
                         print!("candidates[");
 
                         for ne in next_edges.iter() {
-                            if used_edges.bit(ne.0) {
+                            if used_edges.get_f(ne.0) {
                                 print!("!");
                             }
                             print!("{},", ne.0);
@@ -1577,12 +1580,11 @@ where
         } else {
             #[cfg(feature = "console_debug")]
             println!(
-                "<-traverse_edge({}) ignoring start edge, count={} {:?}",
+                "<-traverse_edge({}) ignoring start edge,  {:?}",
                 seed_edge.0,
-                count,
                 self.diagram
-                    .edge_rot_next_iterator(Some(seed_edge))
-                    .filter(|x| !ignored_edges.bit(x.0))
+                    .edge_rot_next_iterator(seed_edge)
+                    .filter(|x| !ignored_edges.get_f(x.0))
                     .map(|x| x.0)
                     .collect::<Vec<usize>>()
             );
@@ -1683,7 +1685,7 @@ where
         #[cfg(feature = "console_debug")]
         println!(
             "Converting e:{:?} to line v0:{} v1:{}",
-            edge.get_id().0,
+            edge.id().0,
             vertex0.get_id().0,
             vertex1.get_id().0,
         );
@@ -1757,7 +1759,7 @@ where
                 end_point,
             );
             #[cfg(feature = "console_debug")]
-            println!("Converted {:?} to {:?}", edge.get_id().0, arc);
+            println!("Converted {:?} to {:?}", edge.id().0, arc);
             Ok(linestring_3d::Shape3d::ParabolicArc(arc))
         } else {
             let distance_to_start = {
@@ -1842,7 +1844,7 @@ where
                 },
             };
             #[cfg(feature = "console_debug")]
-            println!("Converted {:?} to {:?}", edge.get_id().0, line);
+            println!("Converted {:?} to {:?}", edge.id().0, line);
             Ok(linestring_3d::Shape3d::Line(line))
         }
     }

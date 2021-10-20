@@ -7,7 +7,7 @@ description = "Simple library for finding centerlines of 2D closed geometry"
 readme = "README.md"
 repository = "https://github.com/eadf/centerline.rs"
 license = "AGPL-3.0"
-keywords = ["centerline", "geometry"]
+keywords = ["centerline", "geometry", "median-axis"]
 exclude = [
     "img/*",
     "idea/*",
@@ -23,8 +23,8 @@ num = "0.4"
 ahash = "0.7"
 num-traits = "0.2"
 vob = "3.0"
-boostvoronoi = "^0.9.2"
-linestring = "0.7"
+boostvoronoi = "^0.9.3"
+linestring = "^0.7.1"
 cgmath = "0.18"
 approx = "0.5"
 thiserror = "1.0"
