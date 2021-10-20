@@ -2,7 +2,7 @@
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.6.1/status.svg)](https://deps.rs/crate/centerline/0.6.1)
+[![dependency status](https://deps.rs/crate/centerline/0.6.2/status.svg)](https://deps.rs/crate/centerline/0.6.2)
 ![license](https://img.shields.io/crates/l/centerline)
 
 This simple library tries to find centerlines, aka the median-axis, of closed 2D geometries.
