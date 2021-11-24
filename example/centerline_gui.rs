@@ -476,7 +476,7 @@ fn main() -> Result<(), CenterlineError> {
             };
             let reverse_middle = shared_data_bm
                 .affine
-                .transform_ba(&cgmath::Point2::from([event.0 as F, event.1 as F]));
+                .transform_ba(cgmath::Point2::from([event.0 as F, event.1 as F]));
             if reverse_middle.is_err() {
                 println!("{:?}", reverse_middle.err().unwrap());
                 return false;
@@ -487,7 +487,7 @@ fn main() -> Result<(), CenterlineError> {
                 shared_data_bm.affine.scale[0] *= scale_mod;
                 shared_data_bm.affine.scale[1] *= scale_mod;
             }
-            let new_middle = shared_data_bm.affine.transform_ab(&cgmath::Point2::from([
+            let new_middle = shared_data_bm.affine.transform_ab(cgmath::Point2::from([
                 reverse_middle[0] as F,
                 reverse_middle[1] as F,
             ]));
@@ -842,12 +842,12 @@ fn recalculate_voronoi_input(
                     s_lines.len()
                 );
                 for lineseq in s_lines.as_lines_iter() {
-                    centerline.segments.push(boostvoronoi::geometry::Line::new(
-                        boostvoronoi::geometry::Point {
+                    centerline.segments.push(boostvoronoi::Line::new(
+                        boostvoronoi::Point {
                             x: lineseq.start.x as i32,
                             y: lineseq.start.y as i32,
                         },
-                        boostvoronoi::geometry::Point {
+                        boostvoronoi::Point {
                             x: lineseq.end.x as i32,
                             y: lineseq.end.y as i32,
                         },
@@ -857,12 +857,12 @@ fn recalculate_voronoi_input(
                 #[cfg(feature = "console_debug")]
                 println!("no reduction");
                 for lineseq in lines.as_lines_iter() {
-                    centerline.segments.push(boostvoronoi::geometry::Line::new(
-                        boostvoronoi::geometry::Point {
+                    centerline.segments.push(boostvoronoi::Line::new(
+                        boostvoronoi::Point {
                             x: lineseq.start.x as i32,
                             y: lineseq.start.y as i32,
                         },
-                        boostvoronoi::geometry::Point {
+                        boostvoronoi::Point {
                             x: lineseq.end.x as i32,
                             y: lineseq.end.y as i32,
                         },
@@ -899,7 +899,7 @@ fn add_data_from_file(
     println!("total aabb b4:{:?}", total_aabb);
 
     let (_plane, transform, voronoi_input_aabb) =
-        centerline::get_transform(&total_aabb, 256.0 * (HF.min(WF) as F - 10.0))?;
+        centerline::get_transform(total_aabb, 256.0 * (HF.min(WF) as F - 10.0))?;
     println!("Read from file:'{}', plane was {:?}", filename, _plane);
     if let Some(inverse_transform) = transform.invert() {
         shared_data_bm.configuration.inverse_transform = inverse_transform;
@@ -929,8 +929,8 @@ fn add_data_from_file(
         .collect();
 
     {
-        let mut screen_aabb = Aabb2::new(&Point2::new(W as F, H as F));
-        screen_aabb.update_point(&Point2::new(0.0, 0.0));
+        let mut screen_aabb = Aabb2::new(Point2::new(W as F, H as F));
+        screen_aabb.update_point(Point2::new(0.0, 0.0));
         shared_data_bm.affine = SimpleAffine::new(&voronoi_input_aabb, &screen_aabb)?;
     }
 
