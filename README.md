@@ -1,8 +1,7 @@
 [![crates.io](https://img.shields.io/crates/v/centerline.svg)](https://crates.io/crates/centerline)
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
-[![Workflow](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Clippy/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.6.2/status.svg)](https://deps.rs/crate/centerline/0.6.2)
+[![dependency status](https://deps.rs/crate/centerline/0.7.0/status.svg)](https://deps.rs/crate/centerline/0.7.0)
 ![license](https://img.shields.io/crates/l/centerline)
 
 This simple library tries to find centerlines, aka the median-axis, of closed 2D geometries.
@@ -36,8 +35,8 @@ println!(
 
 ## Gui example
 
-```fish
-cargo run --example fltk_gui --features=obj-rs --release"
+```sh
+cargo run --example fltk_gui --features=obj-rs --release
 ```
 The example only displays 2D, but the generated center-line is actually 3D line segments.\
 The Z coordinate is the distance between the 2D center-line, and the geometry that created it. 
@@ -46,6 +45,7 @@ The example GUI takes `.obj` files as input. The `.obj` file needs to be 2D in s
 Also make sure there are no intersecting outer edges.
 
 ## Rust requirement
+The crate is only tested on 1.56 and above (2021 edition).
 
 Will automatically use `#![feature(hash_drain_filter)]` and `#![feature(map_first_last)]` if run on `rust +nightly`. 
 

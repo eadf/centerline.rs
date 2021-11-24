@@ -16,19 +16,13 @@
 #![cfg_attr(feature = "map_first_last", feature(map_first_last))]
 
 use boostvoronoi as BV;
-use cgmath::SquareMatrix;
-use cgmath::Transform;
-use cgmath::{InnerSpace, MetricSpace};
-use linestring::linestring_2d;
-use linestring::linestring_2d::convex_hull;
-use linestring::linestring_3d;
-use linestring::linestring_3d::{Line3, LineString3, LineStringSet3};
+use cgmath::{InnerSpace, MetricSpace, SquareMatrix, Transform};
+use linestring::linestring_2d::{self, convex_hull};
+use linestring::linestring_3d::{self, Line3, LineString3, LineStringSet3};
 use ordered_float::OrderedFloat;
-use rayon::iter::IntoParallelIterator;
-use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::VecDeque;
 use std::line;
-use std::ops::Neg;
 use thiserror::Error;
 
 #[macro_use]
@@ -273,13 +267,10 @@ pub fn remove_internal_edges(
 }
 
 /// Group input edges into connected shapes
-pub fn divide_into_shapes<T>(
+pub fn divide_into_shapes<T: cgmath::BaseFloat + Sync + Send>(
     edge_set: ahash::AHashSet<(usize, usize)>,
     points: Vec<cgmath::Point3<T>>,
-) -> Result<Vec<LineStringSet3<T>>, CenterlineError>
-where
-    T: cgmath::BaseFloat + Sync + Send,
-{
+) -> Result<Vec<LineStringSet3<T>>, CenterlineError> {
     //println!("All edges: {:?}", all_edges);
     // put all edges into a hashmap of Vertices, this will make it possible to
     // arrange them in the order they are connected
@@ -616,12 +607,9 @@ pub fn get_transform_relaxed<F: cgmath::BaseFloat + Sync>(
 
 /// try to consolidate shapes. If one AABB and convex hull (a) totally engulfs another shape (b)
 /// we put shape (b) inside (a)
-pub fn consolidate_shapes<F>(
+pub fn consolidate_shapes<F: cgmath::BaseFloat + Sync>(
     mut raw_data: Vec<linestring::linestring_2d::LineStringSet2<F>>,
-) -> Result<Vec<linestring::linestring_2d::LineStringSet2<F>>, CenterlineError>
-where
-    F: cgmath::BaseFloat + Sync,
-{
+) -> Result<Vec<linestring::linestring_2d::LineStringSet2<F>>, CenterlineError> {
     //for shape in raw_data.iter().enumerate() {
     //    println!("Shape #{} aabb:{:?}", shape.0, shape.1.get_aabb());
     //}
@@ -677,11 +665,7 @@ where
 ///     * Filter out voronoi edges based on the angle to input geometry.
 ///     * Collects connected edges into line strings and line segments.
 ///     * Performs line simplification on those line strings.
-pub struct Centerline<I, F>
-where
-    I: BV::InputType + Neg<Output = I>,
-    F: cgmath::BaseFloat + Sync + BV::OutputType + Neg<Output = F>,
-{
+pub struct Centerline<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> {
     /// the input data to the voronoi diagram
     pub segments: Vec<BV::Line<I>>,
     /// the voronoi diagram itself
@@ -901,54 +885,50 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                     if !ignored_edges.get_f(e.0) {
                         // all infinite edges should be rejected at this point, so
                         // all edges should contain a vertex0 and vertex1
-
-                        let vertex0 = self.diagram.edge_get_vertex0(e)?;
-                        let vertex0 = vertex0.map(|x| self.diagram.vertex_get(x));
-
-                        if let Some(Ok(vertex0)) = vertex0 {
-                            let vertex0 = cgmath::Point2 {
-                                x: vertex0.x(),
-                                y: vertex0.y(),
-                            };
-                            let vertex1 = self.diagram.edge_get_vertex1(e)?;
-                            let vertex1 = vertex1.map(|x| self.diagram.vertex_get(x));
-                            if let Some(Ok(vertex1)) = vertex1 {
-                                let vertex1 = cgmath::Point2 {
-                                    x: vertex1.x(),
-                                    y: vertex1.y(),
-                                };
+                        if let Some(Ok(vertex0)) = self
+                            .diagram
+                            .edge_get_vertex0(e)?
+                            .map(|x| self.diagram.vertex_get(x))
+                        {
+                            let vertex0 = cgmath::Point2::<F>::from(vertex0);
+                            if let Some(Ok(vertex1)) = self
+                                .diagram
+                                .edge_get_vertex1(e)?
+                                .map(|x| self.diagram.vertex_get(x))
+                            {
+                                let vertex1 = cgmath::Point2::<F>::from(vertex1);
                                 let _ = self.angle_test_6(
                                     cos_angle,
                                     &mut ignored_edges,
                                     e,
-                                    &vertex0,
-                                    &vertex1,
-                                    &point0,
-                                    &point1,
+                                    vertex0,
+                                    vertex1,
+                                    point0,
+                                    point1,
                                 )? || self.angle_test_6(
                                     cos_angle,
                                     &mut ignored_edges,
                                     e,
-                                    &vertex0,
-                                    &vertex1,
-                                    &point1,
-                                    &point0,
+                                    vertex0,
+                                    vertex1,
+                                    point1,
+                                    point0,
                                 )? || self.angle_test_6(
                                     cos_angle,
                                     &mut ignored_edges,
                                     e,
-                                    &vertex1,
-                                    &vertex0,
-                                    &point0,
-                                    &point1,
+                                    vertex1,
+                                    vertex0,
+                                    point0,
+                                    point1,
                                 )? || self.angle_test_6(
                                     cos_angle,
                                     &mut ignored_edges,
                                     e,
-                                    &vertex1,
-                                    &vertex0,
-                                    &point1,
-                                    &point0,
+                                    vertex1,
+                                    vertex0,
+                                    point1,
+                                    point0,
                                 )?;
                             }
                         }
@@ -971,10 +951,10 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
         cos_angle: F,
         ignored_edges: &mut Vob32,
         edge_id: BV::EdgeIndex,
-        vertex0: &cgmath::Point2<F>,
-        vertex1: &cgmath::Point2<F>,
-        s_point_0: &cgmath::Point2<F>,
-        s_point_1: &cgmath::Point2<F>,
+        vertex0: cgmath::Point2<F>,
+        vertex1: cgmath::Point2<F>,
+        s_point_0: cgmath::Point2<F>,
+        s_point_1: cgmath::Point2<F>,
     ) -> Result<bool, CenterlineError> {
         if cgmath::ulps_eq!(vertex0.x, s_point_0.x) && cgmath::ulps_eq!(vertex0.y, s_point_0.y) {
             // todo better to compare to the square of the dot product, fewer operations.
@@ -1419,10 +1399,10 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
         maxdist: F,
     ) -> Result<(), CenterlineError> {
         #[cfg(feature = "console_debug")]
-        println!();
-        #[cfg(feature = "console_debug")]
-        println!("->traverse_edge({})", seed_edge.0);
-
+        {
+            println!();
+            println!("->traverse_edge({})", seed_edge.0);
+        }
         #[cfg(feature = "console_debug")]
         let mut mockup = Vec::<Vec<BV::EdgeIndex>>::default();
 
@@ -1603,12 +1583,13 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
         maxdist: F,
     ) -> Result<(), CenterlineError> {
         #[cfg(feature = "console_debug")]
-        println!();
-        #[cfg(feature = "console_debug")]
-        println!(
-            "Converting {:?} to lines",
-            edges.iter().map(|x| x.0).collect::<Vec<usize>>()
-        );
+        {
+            println!();
+            println!(
+                "Converting {:?} to lines",
+                edges.iter().map(|x| x.0).collect::<Vec<usize>>()
+            );
+        }
         match edges.len() {
             0 => panic!(),
             1 => {

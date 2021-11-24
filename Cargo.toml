@@ -2,7 +2,7 @@
 name = "centerline"
 version = "0.7.0"
 authors = ["eadf"]
-edition = "2018"
+edition = "2021"
 description = "Simple library for finding centerlines of 2D closed geometry"
 readme = "README.md"
 repository = "https://github.com/eadf/centerline.rs"
@@ -23,7 +23,7 @@ num = "0.4"
 ahash = "0.7"
 num-traits = "0.2"
 vob = "3.0"
-boostvoronoi = "0.10"
+boostvoronoi = { version = "0.10", features = ["cgmath"] }
 linestring = "0.8"
 cgmath = "0.18"
 approx = "0.5"
