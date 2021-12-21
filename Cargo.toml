@@ -19,7 +19,6 @@ console_debug = []
 default = []
 
 [dependencies]
-num = "~0.4"
 ahash = "~0.7"
 num-traits = "~0.2"
 vob = "~3.0"

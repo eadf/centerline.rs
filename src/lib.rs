@@ -1830,6 +1830,6 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
 
     #[inline(always)]
     pub fn i2f(input: I) -> F {
-        num::cast::<I, F>(input).unwrap()
+        num_traits::cast::<I, F>(input).unwrap()
     }
 }

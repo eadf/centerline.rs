@@ -65,7 +65,7 @@ use itertools::Itertools;
 use linestring::linestring_2d::{Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
 use linestring::linestring_3d;
 use linestring::linestring_3d::LineString3;
-use num::traits::FloatConst;
+use num_traits::FloatConst;
 use rayon::prelude::*;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
