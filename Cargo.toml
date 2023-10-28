@@ -22,9 +22,9 @@ cgmath = ["vector-traits/cgmath"] # this is only needed for some tests
 [dependencies]
 ahash = "0.8.6"
 vob = "3.0.3"
-boostvoronoi = { version = "0.10.3" }
+boostvoronoi = { version = "0.11.0" }
 vector-traits = { version = "0.2.0", features = ["glam"] }
-linestring = "0.10.0"
+linestring = "0.10.1"
 thiserror = "1.0.50"
 rayon = "1.8.0"
 bitflags = "2.4.1"
