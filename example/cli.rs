@@ -1,4 +1,5 @@
 use centerline::{Centerline, CenterlineError, GrowingVob};
+use vector_traits::glam::Vec3;
 
 fn main() -> Result<(), CenterlineError> {
     let _test_segments: [[i32; 4]; 12] = [
@@ -22,7 +23,7 @@ fn main() -> Result<(), CenterlineError> {
         350,
         350,
     );
-    let mut centerline = Centerline::<i32, f32>::with_segments(segments);
+    let mut centerline = Centerline::<i32, Vec3>::with_segments(segments);
     centerline.build_voronoi()?;
     println!(
         "Result: cells:{}, edges:{}, vertices:{}",

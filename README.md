@@ -1,7 +1,7 @@
 [![crates.io](https://img.shields.io/crates/v/centerline.svg)](https://crates.io/crates/centerline)
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.7.0/status.svg)](https://deps.rs/crate/centerline/0.7.0)
+[![dependency status](https://deps.rs/crate/centerline/0.8.0/status.svg)](https://deps.rs/crate/centerline/0.8.0)
 ![license](https://img.shields.io/crates/l/centerline)
 
 This simple library tries to find centerlines, aka the median-axis, of closed 2D geometries.
@@ -18,14 +18,14 @@ makes for much cleaner tool-paths etc. It also performs a line simplification on
 
 ```rust
 let segments = ...same as boost voronoi segments...
-let mut centerline = Centerline::<i32, f32, i64, f64>::with_segments(segments);
+let mut centerline = Centerline::<i32, glam::Vec3>::::with_segments(segments);
 centerline.build_voronoi()?;
 // the cosine value of the angle limit. 
 let cos_angle:f32 = 0.38;
 // the RDP simplification distance
 let centerline_simplification:f32 = 0.1;
 
-let _= centerline.calculate_centerline(cos_angle, centerline_simplification, None)?;
+centerline.calculate_centerline(cos_angle, centerline_simplification, None)?;
 println!(
    "Result: lines:{}, line_strings:{}",
    centerline.lines.as_ref().map_or(0,|x|x.len()),
@@ -44,12 +44,23 @@ The Z coordinate is the distance between the 2D center-line, and the geometry th
 The example GUI takes `.obj` files as input. The `.obj` file needs to be 2D in some axis aligned plane (one of the coordinates needs to be zero). 
 Also make sure there are no intersecting outer edges.
 
-## Rust requirement
-The crate is only tested on 1.56 and above (2021 edition).
+### Minimum Supported Rust Version (MSRV)
 
-Will automatically use `#![feature(hash_drain_filter)]` and `#![feature(map_first_last)]` if run on `rust +nightly`. 
+The minimum supported version of Rust for `centerline` is `1.66`.
 
 ## Todo
 
+- [ ] Add better tests
 - [ ] Sometimes a shape registers as 'outside' it's convex hull 
 - [ ] Add opengl to fltk_gui so that the 3D aspect of the center-line can be visualized. 
+
+## License
+
+Licensed under either of
+
+* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)
+  or http://www.apache.org/licenses/LICENSE-2.0)
+* MIT license ([LICENSE-MIT](LICENSE-MIT)
+  or http://opensource.org/licenses/MIT)
+
+at your option.

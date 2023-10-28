@@ -1,52 +1,49 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2021,2023 lacklustr@protonmail.com https://github.com/eadf
+
+// This file is part of the centerline crate.
+
 /*
-Centerline detection library.
+Copyright (c) 2021,2023 lacklustr@protonmail.com https://github.com/eadf
 
-Copyright (C) 2021 eadf https://github.com/eadf
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-This program is free software: you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later
-version.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-This program is distributed in the hope that it will be useful, but WITHOUT
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
-You should have received a copy of the GNU General Public License along with
-this program. If not, see <https://www.gnu.org/licenses/>.
+or
 
-Also add information on how to contact you by electronic and paper mail.
+Copyright 2021,2023 lacklustr@protonmail.com https://github.com/eadf
 
-If the program does terminal interaction, make it output a short notice like
-this when it starts in an interactive mode:
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-intersection2d Copyright (C) 2021 eadf
+    http://www.apache.org/licenses/LICENSE-2.0
 
-This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
-
-This is free software, and you are welcome to redistribute it under certain
-conditions; type `show c' for details.
-
-The hypothetical commands `show w' and `show c' should show the appropriate
-parts of the General Public License. Of course, your program's commands might
-be different; for a GUI interface, you would use an "about box".
-
-You should also get your employer (if you work as a programmer) or school,
-if any, to sign a "copyright disclaimer" for the program, if necessary. For
-more information on this, and how to apply and follow the GNU GPL, see <https://www.gnu.org/licenses/>.
-
-The GNU General Public License does not permit incorporating your program
-into proprietary programs. If your program is a subroutine library, you may
-consider it more useful to permit linking proprietary applications with the
-library. If this is what you want to do, use the GNU Lesser General Public
-License instead of this License. But first, please read <https://www.gnu.org/
-licenses /why-not-lgpl.html>.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
-use centerline::Centerline;
 use centerline::CenterlineError;
-use cgmath::{Matrix4, One};
-use cgmath::{Point2, SquareMatrix};
+use centerline::Matrix4;
+use centerline::{Centerline, HasMatrix4};
 
 use fltk::app::redraw;
 use fltk::enums::*;
@@ -55,7 +52,7 @@ use fltk::valuator::HorNiceSlider;
 use fltk::*;
 use fltk::{app, draw::*, frame::*, prelude::*};
 
-use cgmath;
+use boostvoronoi::{InputType, OutputType};
 use fltk::app::MouseWheel;
 use fltk::button::RoundButton;
 use fltk::dialog::FileDialogType;
@@ -65,7 +62,6 @@ use itertools::Itertools;
 use linestring::linestring_2d::{Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
 use linestring::linestring_3d;
 use linestring::linestring_3d::LineString3;
-use num_traits::FloatConst;
 use rayon::prelude::*;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
@@ -74,6 +70,11 @@ use std::rc::Rc;
 
 // this requires the "obj-rs" feature to be active
 use obj;
+#[allow(unused_imports)]
+use vector_traits::glam::{DVec3, Vec3};
+use vector_traits::num_traits::float::FloatCore;
+use vector_traits::num_traits::{AsPrimitive, FloatConst};
+use vector_traits::{GenericScalar, GenericVector3, HasXY};
 
 #[macro_use]
 extern crate bitflags;
@@ -87,17 +88,11 @@ const WF: i32 = 790;
 const H: i32 = 650;
 const W: i32 = 800;
 
-// The float type used by voronoi diagram
-type F = f32;
-
-// The integer type used by voronoi diagram
-type I = i32;
-
 #[derive(Debug, Clone, Copy)]
 pub enum GuiMessage {
-    SliderPreChanged(F),
-    SliderPostChanged(F),
-    SliderDotChanged(F),
+    SliderPreChanged(f64),
+    SliderPostChanged(f64),
+    SliderDotChanged(f64),
     Filter(DrawFilterFlag),
     MenuChoiceLoad,
     MenuChoiceSaveOutline,
@@ -105,6 +100,7 @@ pub enum GuiMessage {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     pub struct DrawFilterFlag: u32 {
         /// Edges considered to be outside all closed input geometry
         const THREAD_GROUP_HULL     = 0b000000000000001;
@@ -116,38 +112,61 @@ bitflags! {
 }
 
 /// Data containing an individual shape, this will be processed by a single thread.
-struct Shape {
+struct Shape<I: InputType, T: GenericVector3>
+where
+    T::Scalar: OutputType,
+{
     // the input data after it has been transformed to our coordinate system
     // but not simplified.
-    raw_data: LineStringSet2<F>,
+    raw_data: LineStringSet2<<T as GenericVector3>::Vector2>,
 
     // centerline.segments is the simplified version of 'raw_data', also input to boost voronoi
-    centerline: Option<Centerline<I, F>>,
+    centerline: Option<Centerline<I, T>>,
 
-    simplified_centerline: Option<Vec<LineString3<F>>>,
+    simplified_centerline: Option<Vec<LineString3<T>>>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Configuration {
-    input_distance: F,
+#[derive(Debug, Clone)]
+struct Configuration<T: GenericVector3 + HasMatrix4> {
+    input_distance: T::Scalar,
     input_distance_dirty: bool,
-    centerline_distance: F,
-    centerline_scaled_distance: F,
+    centerline_distance: T::Scalar,
+    centerline_scaled_distance: T::Scalar,
     centerline_distance_dirty: bool,
-    normalized_dot: F,
+    normalized_dot: T::Scalar,
     normalized_dot_dirty: bool,
     last_message: Option<GuiMessage>,
     draw_flag: DrawFilterFlag,
-    inverse_transform: Matrix4<F>,
+    inverse_transform: T::Matrix4Type,
 }
 
-struct SharedData {
-    shapes: Option<Vec<Shape>>,
-    configuration: Configuration,
-    affine: SimpleAffine<F>,
+struct SharedData<I: InputType, T: GenericVector3 + HasMatrix4>
+where
+    T::Scalar: OutputType,
+{
+    shapes: Option<Vec<Shape<I, T>>>,
+    configuration: Configuration<T>,
+    affine: SimpleAffine<<T as GenericVector3>::Vector2>,
 }
 
 fn main() -> Result<(), CenterlineError> {
+    // define the types of execution by changing the generic parameters:
+    typed_main::<i32, DVec3>() // voronoi input data is i32, voronoi output is f64
+                               //typed_main::<i32, Vec3>() // voronoi input data is i32, voronoi output is f32
+}
+
+// i don't know why these types require 'static, (note that is the types, not references that need
+// 'static). I think it has something to do with the gui callbacks.
+fn typed_main<I: InputType + Send + 'static, T: GenericVector3 + HasMatrix4 + 'static>(
+) -> Result<(), CenterlineError>
+where
+    T::Scalar: OutputType,
+    I: AsPrimitive<T::Scalar>,
+    T::Scalar: AsPrimitive<I> + AsPrimitive<i32>,
+    i32: AsPrimitive<T::Scalar>,
+    f32: AsPrimitive<T::Scalar>,
+    f64: AsPrimitive<T::Scalar>,
+{
     let app = app::App::default();
     let mut wind = window::Window::default()
         .with_size(W, HF + 150)
@@ -164,6 +183,10 @@ fn main() -> Result<(), CenterlineError> {
     let mut slider_pre = HorNiceSlider::default()
         .with_size(100, 25)
         .with_label("Input data simplification distance");
+
+    slider_pre.set_tooltip(
+        "This slider defines how much the line simplification should remove from the input lines",
+    );
     slider_pre.set_value(0.5);
     slider_pre.set_frame(FrameType::PlasticUpBox);
     slider_pre.set_color(Color::White);
@@ -171,6 +194,12 @@ fn main() -> Result<(), CenterlineError> {
     let mut slider_dot = HorNiceSlider::default()
         .with_size(100, 25)
         .with_label("Angle: 50.0000°");
+    slider_dot.set_tooltip(
+        "This slider defines the angle predicate of the edge removal process.\
+         Voronoi edges that are touching the geometry will be removed if the angle between the edge \
+         and the input geometry exceeds this value",
+    );
+
     slider_dot.set_value(0.55);
     slider_dot.set_frame(FrameType::PlasticUpBox);
     slider_dot.set_color(Color::White);
@@ -178,6 +207,9 @@ fn main() -> Result<(), CenterlineError> {
     let mut slider_post = HorNiceSlider::default()
         .with_size(100, 25)
         .with_label("Centerline data simplification distance");
+    slider_post.set_tooltip(
+        "This slider defines how much the line simplification should remove from the output lines",
+    );
     slider_post.set_value(0.5);
     slider_post.set_frame(FrameType::PlasticUpBox);
     slider_post.set_color(Color::White);
@@ -209,6 +241,10 @@ fn main() -> Result<(), CenterlineError> {
     let mut internal_edges_button = RoundButton::default()
         .with_size(180, 25)
         .with_label("Remove internal edges");
+    internal_edges_button.set_tooltip(
+        "If this button is enabled the inner geometry \
+         (think the inside of the letter O) will be hidden.",
+    );
     internal_edges_button.toggle(true);
     internal_edges_button.set_frame(FrameType::PlasticUpBox);
 
@@ -217,30 +253,31 @@ fn main() -> Result<(), CenterlineError> {
     wind.end();
     wind.show();
 
-    let shared_data_rc = Rc::new(RefCell::new(SharedData {
+    let shared_data_rc = Rc::new(RefCell::new(SharedData::<I, T> {
         shapes: None,
         configuration: Configuration {
-            centerline_distance: 0.0,
-            centerline_scaled_distance: 256.0,
+            centerline_distance: 0.0.into(),
+            centerline_scaled_distance: 256.0.into(),
             centerline_distance_dirty: true,
-            normalized_dot: 0.38,
+            normalized_dot: 0.38.into(),
             normalized_dot_dirty: true,
-            input_distance: 0.0,
+            input_distance: 0.0.into(),
             input_distance_dirty: true,
             last_message: None,
             draw_flag: DrawFilterFlag::DRAW_ALL
                 ^ DrawFilterFlag::THREAD_GROUP_AABB
                 ^ DrawFilterFlag::THREAD_GROUP_HULL
                 ^ DrawFilterFlag::INTERNAL_GEOMETRY,
-            inverse_transform: Matrix4::<F>::one(),
+            inverse_transform: T::identity(),
         },
         affine: SimpleAffine::default(),
     }));
 
     let (sender, receiver) = app::channel::<GuiMessage>();
     sender.send(GuiMessage::SliderPreChanged(50.0));
+
     slider_pre.set_callback(move |s| {
-        let value = s.value() as f32 * 100.0;
+        let value = s.value() * 100.0;
         s.set_label(&format!(
             "   Input data simplification distance: {:.4}       ",
             value
@@ -252,11 +289,11 @@ fn main() -> Result<(), CenterlineError> {
         let value = s.value() * 90.0;
         s.set_label(&format!("   Angle: {:.4}°      ", value));
         let value = (f64::PI() * value / 180.0).cos();
-        sender.send(GuiMessage::SliderDotChanged(value as F));
+        sender.send(GuiMessage::SliderDotChanged(value));
     });
 
     slider_post.set_callback(move |s| {
-        let value = s.value() as f32 * 100.0;
+        let value = s.value() * 100.0;
         s.set_label(&format!(
             "   Centerline simplification distance: {:.4}       ",
             value
@@ -308,14 +345,10 @@ fn main() -> Result<(), CenterlineError> {
     let shared_data_c = Rc::clone(&shared_data_rc);
     // This is called whenever the window is drawn and redrawn (in the event loop)
     wind.draw(move |_| {
-        let draw_fn = |line: Result<[F; 4], _>, cross: bool| {
+        let draw_fn = |line: Result<[T::Scalar; 4], _>, cross: bool| {
             if let Ok(line) = line {
-                let (x1, y1, x2, y2) = (
-                    line[0] as i32,
-                    line[1] as i32,
-                    line[2] as i32,
-                    line[3] as i32,
-                );
+                let (x1, y1, x2, y2): (i32, i32, i32, i32) =
+                    (line[0].as_(), line[1].as_(), line[2].as_(), line[3].as_());
                 draw::draw_line(x1, y1, x2, y2);
                 if cross {
                     // draws a little X at the end points.
@@ -345,10 +378,10 @@ fn main() -> Result<(), CenterlineError> {
                     for a_line in centerline.segments.iter() {
                         draw_fn(
                             data_bm.affine.transform_ab_a([
-                                a_line.start.x as F,
-                                a_line.start.y as F,
-                                a_line.end.x as F,
-                                a_line.end.y as F,
+                                a_line.start.x.as_(),
+                                a_line.start.y.as_(),
+                                a_line.end.x.as_(),
+                                a_line.end.y.as_(),
                             ]),
                             cross,
                         );
@@ -361,14 +394,15 @@ fn main() -> Result<(), CenterlineError> {
                     {
                         draw::set_line_style(LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark1);
-                        let aabb: LineString2<F> = shape.raw_data.get_aabb().clone().into();
-                        for a_line in aabb.as_lines_iter() {
+                        let aabb: LineString2<<T as GenericVector3>::Vector2> =
+                            shape.raw_data.get_aabb().clone().into();
+                        for a_line in aabb.iter() {
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
-                                    a_line.start.x as F,
-                                    a_line.start.y as F,
-                                    a_line.end.x as F,
-                                    a_line.end.y as F,
+                                    a_line.start.x() as T::Scalar,
+                                    a_line.start.y() as T::Scalar,
+                                    a_line.end.x() as T::Scalar,
+                                    a_line.end.y() as T::Scalar,
                                 ]),
                                 false,
                             );
@@ -383,13 +417,13 @@ fn main() -> Result<(), CenterlineError> {
                         draw::set_line_style(LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark2);
                         if let Some(ref hull) = shape.raw_data.get_convex_hull() {
-                            for a_line in hull.as_lines_iter() {
+                            for a_line in hull.iter() {
                                 draw_fn(
                                     data_bm.affine.transform_ab_a([
-                                        a_line.start.x as F,
-                                        a_line.start.y as F,
-                                        a_line.end.x as F,
-                                        a_line.end.y as F,
+                                        a_line.start.x(),
+                                        a_line.start.y(),
+                                        a_line.end.x(),
+                                        a_line.end.y(),
                                     ]),
                                     false,
                                 );
@@ -405,13 +439,13 @@ fn main() -> Result<(), CenterlineError> {
                         if let Some(shape_internals) = shape.raw_data.get_internals() {
                             draw::set_draw_color(Color::Green);
                             for hull in shape_internals.iter() {
-                                for a_line in hull.1.as_lines_iter() {
+                                for a_line in hull.1.iter() {
                                     draw_fn(
                                         data_bm.affine.transform_ab_a([
-                                            a_line.start.x as F,
-                                            a_line.start.y as F,
-                                            a_line.end.x as F,
-                                            a_line.end.y as F,
+                                            a_line.start.x(),
+                                            a_line.start.y(),
+                                            a_line.end.x(),
+                                            a_line.end.y(),
                                         ]),
                                         false,
                                     );
@@ -425,10 +459,10 @@ fn main() -> Result<(), CenterlineError> {
                     for a_line in centerline.lines.iter().flatten() {
                         draw_fn(
                             data_bm.affine.transform_ab_a([
-                                a_line.start.x as F,
-                                a_line.start.y as F,
-                                a_line.end.x as F,
-                                a_line.end.y as F,
+                                a_line.start.x(),
+                                a_line.start.y(),
+                                a_line.end.x(),
+                                a_line.end.y(),
                             ]),
                             false,
                         )
@@ -445,10 +479,10 @@ fn main() -> Result<(), CenterlineError> {
                         for a_line in a_linestring.as_lines_iter() {
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
-                                    a_line.start.x as F,
-                                    a_line.start.y as F,
-                                    a_line.end.x as F,
-                                    a_line.end.y as F,
+                                    a_line.start.x(),
+                                    a_line.start.y(),
+                                    a_line.end.x(),
+                                    a_line.end.y(),
                                 ]),
                                 cross,
                             );
@@ -476,29 +510,28 @@ fn main() -> Result<(), CenterlineError> {
             };
             let reverse_middle = shared_data_bm
                 .affine
-                .transform_ba(cgmath::Point2::from([event.0 as F, event.1 as F]));
+                .transform_ba(T::Vector2::new_2d(event.0.as_(), event.1.as_()));
             if reverse_middle.is_err() {
                 println!("{:?}", reverse_middle.err().unwrap());
                 return false;
             }
             let reverse_middle = reverse_middle.unwrap();
             if event_dy != 0 {
-                let scale_mod = 1.01_f32.powf(event_dy as F);
+                let scale_mod: T::Scalar = 1.01_f32.powf(event_dy as f32).as_();
                 shared_data_bm.affine.scale[0] *= scale_mod;
                 shared_data_bm.affine.scale[1] *= scale_mod;
             }
-            let new_middle = shared_data_bm.affine.transform_ab(cgmath::Point2::from([
-                reverse_middle[0] as F,
-                reverse_middle[1] as F,
-            ]));
+            let new_middle = shared_data_bm
+                .affine
+                .transform_ab(T::Vector2::new_2d(reverse_middle[0], reverse_middle[1]));
             if new_middle.is_err() {
                 println!("{:?}", new_middle.err().unwrap());
                 return false;
             }
             let new_middle = new_middle.unwrap();
             // When zooming we want the center of screen remain at the same relative position.
-            shared_data_bm.affine.b_offset[0] += (event.0 as F) - new_middle[0];
-            shared_data_bm.affine.b_offset[1] += (event.1 as F) - new_middle[1];
+            shared_data_bm.affine.b_offset[0] += event.0.as_() - new_middle[0];
+            shared_data_bm.affine.b_offset[1] += event.1.as_() - new_middle[1];
 
             redraw();
             true
@@ -512,8 +545,8 @@ fn main() -> Result<(), CenterlineError> {
             } else {
                 let md = mouse_drag.unwrap();
                 let mut shared_data_bm = shared_data_c.borrow_mut();
-                shared_data_bm.affine.b_offset[0] += (event.0 - md.0) as F;
-                shared_data_bm.affine.b_offset[1] += (event.1 - md.1) as F;
+                shared_data_bm.affine.b_offset[0] += (event.0 - md.0).as_();
+                shared_data_bm.affine.b_offset[1] += (event.1 - md.1).as_();
                 mouse_drag = Some(*event);
                 redraw();
             }
@@ -535,17 +568,17 @@ fn main() -> Result<(), CenterlineError> {
             match msg {
                 GuiMessage::SliderPreChanged(value) => {
                     let mut shared_data_bm = shared_data_c1.borrow_mut();
-                    shared_data_bm.configuration.input_distance = value as F;
+                    shared_data_bm.configuration.input_distance = value.as_();
                     shared_data_bm.configuration.input_distance_dirty = true;
                 }
                 GuiMessage::SliderDotChanged(value) => {
                     let mut shared_data_bm = shared_data_c1.borrow_mut();
-                    shared_data_bm.configuration.normalized_dot = value;
+                    shared_data_bm.configuration.normalized_dot = value.as_();
                     shared_data_bm.configuration.normalized_dot_dirty = true;
                 }
                 GuiMessage::SliderPostChanged(value) => {
                     let mut shared_data_bm = shared_data_c1.borrow_mut();
-                    shared_data_bm.configuration.centerline_distance = value as F;
+                    shared_data_bm.configuration.centerline_distance = value.as_();
                     shared_data_bm.configuration.centerline_distance_dirty = true;
                 }
                 GuiMessage::Filter(flag) => {
@@ -558,7 +591,7 @@ fn main() -> Result<(), CenterlineError> {
                 GuiMessage::MenuChoiceLoad => {
                     let mut chooser = dialog::NativeFileChooser::new(FileDialogType::BrowseDir);
 
-                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_directory(&std::path::PathBuf::from("examples"));
                     let _ = chooser.set_title("select your input data");
                     chooser.set_filter("*.obj");
                     chooser.show();
@@ -579,14 +612,14 @@ fn main() -> Result<(), CenterlineError> {
                     let mut chooser =
                         dialog::NativeFileChooser::new(FileDialogType::BrowseSaveFile);
 
-                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_directory(&std::path::PathBuf::from("examples"));
                     let _ = chooser.set_title("select file to save outline to");
                     chooser.set_filter("*.obj");
                     chooser.show();
                     if let Some(filename) = chooser.filenames().first() {
                         let shared_data_c = Rc::clone(&shared_data_rc);
                         let shared_data_b = shared_data_c.borrow();
-                        let mut data_to_save = Vec::<Vec<linestring_3d::Line3<F>>>::new();
+                        let mut data_to_save = Vec::<Vec<linestring_3d::Line3<T>>>::new();
                         for s in shared_data_b.shapes.iter().flatten() {
                             if let Some(ref centerline) = s.centerline {
                                 data_to_save.push(
@@ -594,15 +627,21 @@ fn main() -> Result<(), CenterlineError> {
                                         .segments
                                         .iter()
                                         .map(|l| {
-                                            Line2::<F>::from([
-                                                l.start.x as F,
-                                                l.start.y as F,
-                                                l.end.x as F,
-                                                l.end.y as F,
+                                            Line2::<<T as GenericVector3>::Vector2>::from([
+                                                l.start.x.as_(),
+                                                l.start.y.as_(),
+                                                l.end.x.as_(),
+                                                l.end.y.as_(),
                                             ])
                                             .copy_to_3d(linestring_3d::Plane::XY)
-                                            .transform(
-                                                &shared_data_b.configuration.inverse_transform,
+                                            .apply(
+                                                |x: T| -> T {
+                                                    let rv: T = shared_data_b
+                                                        .configuration
+                                                        .inverse_transform
+                                                        .transform_point3(x);
+                                                    rv
+                                                },
                                             )
                                         })
                                         .collect(),
@@ -622,28 +661,35 @@ fn main() -> Result<(), CenterlineError> {
                     let mut chooser =
                         dialog::NativeFileChooser::new(FileDialogType::BrowseSaveFile);
 
-                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_directory(&std::path::PathBuf::from("examples"));
                     let _ = chooser.set_title("select file to save outline to");
                     chooser.set_filter("*.obj");
                     chooser.show();
                     if let Some(filename) = chooser.filenames().first() {
                         let shared_data_c = Rc::clone(&shared_data_rc);
                         let shared_data_b = shared_data_c.borrow();
-                        let mut data_to_save = Vec::<Vec<linestring_3d::Line3<F>>>::new();
+                        let mut data_to_save = Vec::<Vec<linestring_3d::Line3<T>>>::new();
                         for s in shared_data_b.shapes.iter().flatten() {
                             for r in s.centerline.iter() {
                                 for ls in r.line_strings.iter().flatten() {
                                     data_to_save.push(
-                                        ls.transform(
-                                            &shared_data_b.configuration.inverse_transform,
-                                        )
-                                        .as_lines(),
+                                        ls.clone()
+                                            .apply(&|x| {
+                                                shared_data_b
+                                                    .configuration
+                                                    .inverse_transform
+                                                    .transform_point3(x)
+                                            })
+                                            .as_lines(),
                                     );
                                 }
                                 for ls in r.lines.iter().flatten() {
-                                    data_to_save.push(vec![ls.transform(
-                                        &shared_data_b.configuration.inverse_transform,
-                                    )]);
+                                    data_to_save.push(vec![ls.apply(|x| {
+                                        shared_data_b
+                                            .configuration
+                                            .inverse_transform
+                                            .transform_point3(x)
+                                    })]);
                                 }
                             }
                         }
@@ -669,7 +715,14 @@ fn main() -> Result<(), CenterlineError> {
 }
 
 /// Re-calculate the center-line and all of the other parameters
-fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
+fn re_calculate<I: InputType + Send, T: GenericVector3>(
+    mut shared_data_bm: RefMut<SharedData<I, T>>,
+) where
+    T: HasMatrix4,
+    T::Scalar: OutputType,
+    I: AsPrimitive<T::Scalar>,
+    T::Scalar: AsPrimitive<I>,
+{
     #[cfg(feature = "console_debug")]
     {
         println!("***********************");
@@ -680,7 +733,7 @@ fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
     if let Some(mut shapes) = shapes {
         shapes = shapes
             .into_par_iter() // .into_iter()
-            .filter_map(|x| threaded_re_calculate_error_handler(x, configuration))
+            .filter_map(|x| threaded_re_calculate_error_handler(x, &configuration))
             .collect();
         shared_data_bm.shapes = Some(shapes);
     }
@@ -690,10 +743,16 @@ fn re_calculate(mut shared_data_bm: RefMut<SharedData>) {
     redraw();
 }
 
-fn threaded_re_calculate_error_handler(
-    shape: Shape,
-    configuration: Configuration,
-) -> Option<Shape> {
+fn threaded_re_calculate_error_handler<I: InputType, T: GenericVector3>(
+    shape: Shape<I, T>,
+    configuration: &Configuration<T>,
+) -> Option<Shape<I, T>>
+where
+    T: HasMatrix4,
+    T::Scalar: OutputType,
+    I: AsPrimitive<T::Scalar>,
+    T::Scalar: AsPrimitive<I>,
+{
     let rv = threaded_re_calculate(shape, configuration);
     match rv {
         Err(e) => {
@@ -705,12 +764,18 @@ fn threaded_re_calculate_error_handler(
 }
 
 /// This is what a single thread does in sequence
-fn threaded_re_calculate(
-    mut shape: Shape,
-    configuration: Configuration,
-) -> Result<Shape, CenterlineError> {
+fn threaded_re_calculate<I: InputType, T: GenericVector3>(
+    mut shape: Shape<I, T>,
+    configuration: &Configuration<T>,
+) -> Result<Shape<I, T>, CenterlineError>
+where
+    T: HasMatrix4,
+    T::Scalar: OutputType,
+    I: AsPrimitive<T::Scalar>,
+    T::Scalar: AsPrimitive<I>,
+{
     if shape.centerline.is_none() {
-        shape.centerline = Some(Centerline::<i32, F>::default());
+        shape.centerline = Some(Centerline::<I, T>::default());
     }
     let input_changed = if configuration.input_distance_dirty {
         recalculate_voronoi_input(&mut shape, configuration)?;
@@ -746,10 +811,15 @@ fn threaded_re_calculate(
 
 #[allow(unused_variables)]
 /// Re-calculate voronoi diagram
-fn recalculate_voronoi_diagram(
-    shape: &mut Shape,
-    configuration: Configuration,
-) -> Result<(), CenterlineError> {
+fn recalculate_voronoi_diagram<I: InputType, T: GenericVector3>(
+    shape: &mut Shape<I, T>,
+    configuration: &Configuration<T>,
+) -> Result<(), CenterlineError>
+where
+    T: HasMatrix4,
+    T::Scalar: OutputType,
+    I: AsPrimitive<T::Scalar>,
+{
     #[cfg(feature = "console_debug")]
     println!("recalculate_voronoi_diagram()");
     if let Some(mut centerline_rw) = shape.centerline.take() {
@@ -760,10 +830,15 @@ fn recalculate_voronoi_diagram(
 }
 
 /// Re-calculate centerline
-fn recalculate_centerline(
-    shape: &mut Shape,
-    configuration: Configuration,
-) -> Result<(), CenterlineError> {
+fn recalculate_centerline<I: InputType, T: GenericVector3>(
+    shape: &mut Shape<I, T>,
+    configuration: &Configuration<T>,
+) -> Result<(), CenterlineError>
+where
+    T: HasMatrix4,
+    T::Scalar: OutputType,
+    I: AsPrimitive<T::Scalar>,
+{
     #[cfg(feature = "console_debug")]
     println!("recalculate_centerline()");
     if let Some(ref mut centerline) = shape.centerline {
@@ -793,24 +868,29 @@ fn recalculate_centerline(
 }
 
 /// simplify centerline
-fn simplify_centerline(
-    shape: &mut Shape,
-    configuration: Configuration,
-) -> Result<(), CenterlineError> {
+fn simplify_centerline<I: InputType, T: GenericVector3>(
+    shape: &mut Shape<I, T>,
+    configuration: &Configuration<T>,
+) -> Result<(), CenterlineError>
+where
+    T: HasMatrix4,
+    T::Scalar: OutputType,
+{
     #[cfg(feature = "console_debug")]
     println!("simplify_centerline()");
     let mut simplified_centerline =
         if let Some(simplified_centerline) = shape.simplified_centerline.take() {
             simplified_centerline
         } else {
-            Vec::<LineString3<F>>::new()
+            Vec::<LineString3<T>>::new()
         };
     simplified_centerline.clear();
     if let Some(ref centerline) = shape.centerline {
         if let Some(ref line_strings) = centerline.line_strings {
             for ls in line_strings.iter() {
-                simplified_centerline
-                    .push(ls.simplify(configuration.centerline_distance * 256_f32.sqrt()));
+                simplified_centerline.push(
+                    ls.simplify_rdp(configuration.centerline_distance * 256_f32.sqrt().into()),
+                );
             }
         }
     }
@@ -820,51 +900,57 @@ fn simplify_centerline(
 
 /// Re-calculate voronoi input geometry by running simplify
 /// Todo: self intersection test -> fail
-fn recalculate_voronoi_input(
-    shape: &mut Shape,
-    configuration: Configuration,
-) -> Result<(), CenterlineError> {
+fn recalculate_voronoi_input<I: InputType + 'static, T: GenericVector3>(
+    shape: &mut Shape<I, T>,
+    configuration: &Configuration<T>,
+) -> Result<(), CenterlineError>
+where
+    T: HasMatrix4,
+    T::Scalar: OutputType,
+    T::Scalar: AsPrimitive<I>,
+{
     #[cfg(feature = "console_debug")]
     println!("recalculate_voronoi_input()");
     if let Some(mut centerline) = shape.centerline.take() {
         centerline.segments.clear();
         for lines in shape.raw_data.set().iter() {
             //let mut set = Vec::<boostvoronoi::Line<i64>>::with_capacity(lines.len());
-            if configuration.input_distance > 0.0 {
+            if configuration.input_distance > T::Scalar::ZERO {
                 #[cfg(feature = "console_debug")]
-                let before = lines.len();
-                let s_lines = lines.simplify((configuration.input_distance as F) * 256_f32.sqrt());
+                let before = lines.0.len();
+                let dist_p: T::Scalar = (configuration.input_distance) * 256_f32.sqrt().into();
+                let s_lines = lines.simplify_rdp(dist_p);
                 #[cfg(feature = "console_debug")]
                 println!(
                     "reduced by {} points of {} = {}",
-                    before - s_lines.len(),
+                    before - s_lines.0.len(),
                     before,
-                    s_lines.len()
+                    s_lines.0.len()
                 );
-                for lineseq in s_lines.as_lines_iter() {
+                for lineseq in s_lines.iter() {
                     centerline.segments.push(boostvoronoi::Line::new(
                         boostvoronoi::Point {
-                            x: lineseq.start.x as i32,
-                            y: lineseq.start.y as i32,
+                            x: lineseq.start.x().as_(),
+                            y: lineseq.start.y().as_(),
                         },
                         boostvoronoi::Point {
-                            x: lineseq.end.x as i32,
-                            y: lineseq.end.y as i32,
+                            x: lineseq.end.x().as_(),
+                            y: lineseq.end.y().as_(),
                         },
                     ));
                 }
             } else {
                 #[cfg(feature = "console_debug")]
                 println!("no reduction");
-                for lineseq in lines.as_lines_iter() {
+                for lineseq in lines.iter() {
                     centerline.segments.push(boostvoronoi::Line::new(
                         boostvoronoi::Point {
-                            x: lineseq.start.x as i32,
-                            y: lineseq.start.y as i32,
+                            x: lineseq.start.x().as_(),
+                            y: lineseq.start.y().as_(),
                         },
                         boostvoronoi::Point {
-                            x: lineseq.end.x as i32,
-                            y: lineseq.end.y as i32,
+                            x: lineseq.end.x().as_(),
+                            y: lineseq.end.y().as_(),
                         },
                     ))
                 }
@@ -878,10 +964,16 @@ fn recalculate_voronoi_input(
 }
 
 /// Add data to the input lines.
-fn add_data_from_file(
-    shared_data: Rc<RefCell<SharedData>>,
+fn add_data_from_file<I: InputType + Send, T: GenericVector3>(
+    shared_data: Rc<RefCell<SharedData<I, T>>>,
     filename: &str,
-) -> Result<(), CenterlineError> {
+) -> Result<(), CenterlineError>
+where
+    T: HasMatrix4,
+    T::Scalar: OutputType,
+    f32: AsPrimitive<<T as HasXY>::Scalar>,
+    i32: AsPrimitive<<T as HasXY>::Scalar>,
+{
     let mut shared_data_bm = shared_data.borrow_mut();
 
     let obj_set = {
@@ -891,36 +983,44 @@ fn add_data_from_file(
 
     let lines = centerline::remove_internal_edges(obj_set)?;
     let lines = centerline::divide_into_shapes(lines.0, lines.1)?;
-    let mut total_aabb = linestring_3d::Aabb3::<f32>::default();
+    let mut total_aabb = linestring_3d::Aabb3::<T>::default();
     for l in lines.iter() {
         total_aabb.update_aabb(l.get_aabb());
     }
     #[cfg(feature = "console_debug")]
     println!("total aabb b4:{:?}", total_aabb);
 
-    let (_plane, transform, voronoi_input_aabb) =
-        centerline::get_transform(total_aabb, 256.0 * (HF.min(WF) as F - 10.0))?;
+    let (_plane, transform, voronoi_input_aabb) = {
+        let dimension: T::Scalar = (256.0 * (HF.min(WF) as f32 - 10.0)).as_();
+        centerline::get_transform::<T>(total_aabb, dimension)?
+    };
     println!("Read from file:'{}', plane was {:?}", filename, _plane);
-    if let Some(inverse_transform) = transform.invert() {
+    if let Some(inverse_transform) = transform.safe_inverse() {
         shared_data_bm.configuration.inverse_transform = inverse_transform;
     } else {
         return Err(CenterlineError::CouldNotCalculateInverseMatrix);
     }
 
     // transform each linestring to 2d
-    let mut raw_data: Vec<LineStringSet2<F>> = lines
+    let mut raw_data: Vec<LineStringSet2<<T as GenericVector3>::Vector2>> = lines
         .par_iter()
-        .map(|x| x.transform(&transform).copy_to_2d(linestring_3d::Plane::XY))
+        .map(|x| {
+            x.clone()
+                .apply(&|v| transform.transform_point3(v))
+                .copy_to_2d(linestring_3d::Plane::XY)
+        })
         .collect();
     {
-        let truncate_float = |x: F| -> F { x as I as F };
+        let truncate_float = |v: <T as GenericVector3>::Vector2| -> <T as GenericVector3>::Vector2 {
+            <T as GenericVector3>::Vector2::new_2d(v.x().round(), v.y().round())
+        };
         for r in raw_data.iter_mut() {
-            r.operation(&truncate_float);
+            r.apply(&truncate_float);
         }
     }
 
     // calculate the hull of each shape
-    let raw_data: Vec<LineStringSet2<F>> = raw_data
+    let raw_data: Vec<LineStringSet2<<T as GenericVector3>::Vector2>> = raw_data
         .into_par_iter()
         .map(|mut x| {
             x.calculate_convex_hull();
@@ -929,8 +1029,11 @@ fn add_data_from_file(
         .collect();
 
     {
-        let mut screen_aabb = Aabb2::new(Point2::new(W as F, H as F));
-        screen_aabb.update_point(Point2::new(0.0, 0.0));
+        let mut screen_aabb = Aabb2::new(<T as GenericVector3>::Vector2::new_2d(W.as_(), H.as_()));
+        screen_aabb.update_with_point(<T as GenericVector3>::Vector2::new_2d(
+            0.0.into(),
+            0.0.into(),
+        ));
         shared_data_bm.affine = SimpleAffine::new(&voronoi_input_aabb, &screen_aabb)?;
     }
 

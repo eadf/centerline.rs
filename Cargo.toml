@@ -1,12 +1,12 @@
 [package]
 name = "centerline"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["eadf"]
 edition = "2021"
 description = "Simple library for finding centerlines of 2D closed geometry"
 readme = "README.md"
 repository = "https://github.com/eadf/centerline.rs"
-license = "AGPL-3.0"
+license = "MIT OR Apache-2.0"
 keywords = ["centerline", "geometry", "median-axis"]
 exclude = [
     "img/*",
@@ -15,22 +15,21 @@ exclude = [
 ]
 
 [features]
-console_debug = []
 default = []
+glam = ["vector-traits/glam"] # this is only needed for the gui, tests and benchmarks
+cgmath = ["vector-traits/cgmath"] # this is only needed for some tests
 
 [dependencies]
-ahash = "~0.7"
-num-traits = "~0.2"
-vob = "~3.0"
-boostvoronoi = { version = "~0.10", features = ["cgmath"] }
-linestring = "~0.8"
-cgmath = "~0.18"
-approx = "~0.5"
-thiserror = "~1.0"
-rayon = "~1.5"
-bitflags = "~1.3"
-ordered-float = "~2.8"
-obj-rs = { version = "~0.7", optional = true }
+ahash = "0.8.6"
+vob = "3.0.3"
+boostvoronoi = { version = "0.10.3" }
+vector-traits = { version = "0.2.0", features = ["glam"] }
+linestring = "0.10.0"
+thiserror = "1.0.50"
+rayon = "1.8.0"
+bitflags = "2.4.1"
+ordered-float = "4.1.1"
+obj-rs = { version = "0.7.1", optional = true }
 
 [[example]]
 name = "fltk_gui"
@@ -42,12 +41,10 @@ name = "cli"
 path = "example/cli.rs"
 
 [dev-dependencies]
-fltk = "~1.2"
-itertools = "~0.10"
-criterion = "~0.3"
-
-[build-dependencies]
-version_check = "~0.9"
+fltk = "1.4.15"
+itertools = "0.11.0"
+criterion = "0.5.1"
+vector-traits = { version = "0.2.0", features = ["glam", "cgmath"] }
 
 [[bench]]
 name = "bench"

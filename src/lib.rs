@@ -1,3 +1,45 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2021,2023 lacklustr@protonmail.com https://github.com/eadf
+
+// This file is part of the centerline crate.
+
+/*
+Copyright (c) 2021,2023 lacklustr@protonmail.com https://github.com/eadf
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+or
+
+Copyright 2021,2023 lacklustr@protonmail.com https://github.com/eadf
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 #![deny(
     rust_2018_compatibility,
     rust_2018_idioms,
@@ -12,18 +54,23 @@
     unused_imports,
     unused_variables
 )]
-#![cfg_attr(feature = "hash_drain_filter", feature(hash_drain_filter))]
-#![cfg_attr(feature = "map_first_last", feature(map_first_last))]
 
+use ahash::AHashSet;
 use boostvoronoi as BV;
-use cgmath::{InnerSpace, MetricSpace, SquareMatrix, Transform};
-use linestring::linestring_2d::{self, convex_hull};
-use linestring::linestring_3d::{self, Line3, LineString3, LineStringSet3};
+use boostvoronoi::OutputType;
+use linestring::linestring_2d::{self, convex_hull, Aabb2, Line2, LineString2, LineStringSet2};
+use linestring::linestring_3d::{self, Line3, LineString3, LineStringSet3, Plane};
 use ordered_float::OrderedFloat;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::line;
 use thiserror::Error;
+use vector_traits::approx::{ulps_eq, AbsDiffEq, UlpsEq};
+use vector_traits::glam::{self, DVec3, Vec3};
+use vector_traits::num_traits::AsPrimitive;
+use vector_traits::num_traits::{self, real::Real};
+use vector_traits::{GenericScalar, GenericVector2, GenericVector3, HasXY};
 
 #[macro_use]
 extern crate bitflags;
@@ -83,7 +130,7 @@ pub trait GrowingVob {
     fn get_f(&self, bit: usize) -> bool;
 }
 
-impl<T: num_traits::PrimInt + std::fmt::Debug> GrowingVob for vob::Vob<T> {
+impl<T: num_traits::PrimInt + Debug> GrowingVob for vob::Vob<T> {
     #[inline]
     fn fill(initial_size: usize) -> Self {
         let mut v = Self::new_with_storage_type(0);
@@ -110,6 +157,109 @@ struct Vertices {
     id: usize,                      // index into the point3 list
     connected_vertices: Vec<usize>, // list of other vertices this vertex is connected to
     shape: Option<usize>,           // shape id
+}
+
+pub trait Matrix4<T: GenericVector3>: Sized + Sync + Send + Clone {
+    fn transform_point3(&self, point: T) -> T;
+    fn safe_inverse(&self) -> Option<Self>;
+}
+
+pub trait HasMatrix4: GenericVector3 {
+    type Matrix4Type: Matrix4<Self>;
+    fn matrix4_from_scale_center_plane(
+        scale: Self::Scalar,
+        center: Self,
+        plane: Plane,
+    ) -> Self::Matrix4Type;
+    fn identity() -> Self::Matrix4Type;
+}
+
+impl HasMatrix4 for Vec3 {
+    type Matrix4Type = glam::Mat4;
+    fn matrix4_from_scale_center_plane(
+        scale: <Vec3 as HasXY>::Scalar,
+        center: Vec3,
+        plane: Plane,
+    ) -> Self::Matrix4Type {
+        let scale_transform = glam::Mat4::from_scale(Vec3::new(scale, scale, scale));
+
+        let center = scale_transform.transform_point3(center);
+        let center_transform =
+            glam::Mat4::from_translation(Vec3::new(-center.x, -center.y, -center.z));
+
+        let plane_transform = match plane {
+            Plane::XY => glam::Mat4::IDENTITY,
+            Plane::XZ => {
+                glam::Mat4::from_cols(glam::Vec4::X, glam::Vec4::Z, glam::Vec4::Y, glam::Vec4::W)
+            }
+            Plane::YZ => {
+                glam::Mat4::from_cols(glam::Vec4::Z, glam::Vec4::Y, glam::Vec4::X, glam::Vec4::W)
+            }
+        };
+        plane_transform * center_transform * scale_transform
+    }
+
+    fn identity() -> Self::Matrix4Type {
+        glam::Mat4::IDENTITY
+    }
+}
+
+impl HasMatrix4 for DVec3 {
+    type Matrix4Type = glam::DMat4;
+    fn matrix4_from_scale_center_plane(
+        scale: <DVec3 as HasXY>::Scalar,
+        center: DVec3,
+        plane: Plane,
+    ) -> Self::Matrix4Type {
+        let scale_transform = glam::DMat4::from_scale(DVec3::new(scale, scale, scale));
+
+        let center = scale_transform.transform_point3(center);
+        let center_transform =
+            glam::DMat4::from_translation(DVec3::new(-center.x, -center.y, -center.z));
+
+        let plane_transform = match plane {
+            Plane::XY => glam::DMat4::IDENTITY,
+            Plane::XZ => glam::DMat4::from_cols(
+                glam::DVec4::X,
+                glam::DVec4::Z,
+                glam::DVec4::Y,
+                glam::DVec4::W,
+            ),
+            Plane::YZ => glam::DMat4::from_cols(
+                glam::DVec4::Z,
+                glam::DVec4::Y,
+                glam::DVec4::X,
+                glam::DVec4::W,
+            ),
+        };
+        plane_transform * center_transform * scale_transform
+    }
+
+    fn identity() -> Self::Matrix4Type {
+        glam::DMat4::IDENTITY
+    }
+}
+
+impl Matrix4<Vec3> for glam::Mat4 {
+    fn transform_point3(&self, point: Vec3) -> Vec3 {
+        glam::Mat4::transform_point3(self, point)
+    }
+
+    // todo: actually make this "safe" by checking the determinant
+    fn safe_inverse(&self) -> Option<<Vec3 as HasMatrix4>::Matrix4Type> {
+        Some(glam::Mat4::inverse(self))
+    }
+}
+
+impl Matrix4<DVec3> for glam::DMat4 {
+    fn transform_point3(&self, point: DVec3) -> DVec3 {
+        glam::DMat4::transform_point3(self, point)
+    }
+
+    // todo: actually make this "safe" by checking the determinant
+    fn safe_inverse(&self) -> Option<<DVec3 as HasMatrix4>::Matrix4Type> {
+        Some(glam::DMat4::inverse(self))
+    }
 }
 
 /// paints every connected vertex with the
@@ -144,7 +294,7 @@ fn paint_every_connected_vertex(
             }
         } else {
             return Err(CenterlineError::InternalError(format!(
-                "Vertex with id:{} dissapeared. {}:{}",
+                "Vertex with id:{} disappeared. {}:{}",
                 current_vertex,
                 file!(),
                 line!()
@@ -158,15 +308,18 @@ fn paint_every_connected_vertex(
 #[allow(clippy::type_complexity)]
 /// Remove internal edges from a wavefront-obj object
 /// This requires the feature "impl-wavefront" to be active.
-pub fn remove_internal_edges(
+pub fn remove_internal_edges<T: GenericVector3>(
     obj: obj::raw::RawObj,
-) -> Result<(ahash::AHashSet<(usize, usize)>, Vec<cgmath::Point3<f32>>), CenterlineError> {
+) -> Result<(AHashSet<(usize, usize)>, Vec<T>), CenterlineError>
+where
+    f32: AsPrimitive<<T as HasXY>::Scalar>,
+{
     for p in obj.points.iter() {
         // Ignore all points
         println!("Ignored point:{:?}", p);
     }
-    let mut all_edges = ahash::AHashSet::<(usize, usize)>::default();
-    let mut internal_edges = ahash::AHashSet::<(usize, usize)>::default();
+    let mut all_edges = AHashSet::<(usize, usize)>::default();
+    let mut internal_edges = AHashSet::<(usize, usize)>::default();
 
     for i in 0..obj.lines.len() {
         // keep all lines
@@ -237,39 +390,23 @@ pub fn remove_internal_edges(
     //println!("Internal edges: {:?}", internal_edges);
     //println!("All edges: {:?}", all_edges);
     //println!("Vertices: {:?}", obj.positions);
-    #[cfg(feature = "hash_drain_filter")]
-    {
-        let _ = all_edges.drain_filter(|x| internal_edges.contains(x));
-    }
 
-    #[cfg(not(feature = "hash_drain_filter"))]
-    {
-        // inefficient version of drain_filter for +stable
-        let kept_edges = all_edges
-            .into_iter()
-            .filter(|x| !internal_edges.contains(&x))
-            .collect();
-        all_edges = kept_edges;
-    }
+    all_edges.retain(|x| !internal_edges.contains(x));
 
     // all_edges should now contain the outline and none of the internal edges.
-    let vertices: Vec<cgmath::Point3<f32>> = obj
+    let vertices: Vec<T> = obj
         .positions
         .into_iter()
-        .map(|x| cgmath::Point3 {
-            x: x.0,
-            y: x.1,
-            z: x.2,
-        })
+        .map(|x| T::new_3d(x.0.as_(), x.1.as_(), x.2.as_()))
         .collect();
 
     Ok((all_edges, vertices))
 }
 
 /// Group input edges into connected shapes
-pub fn divide_into_shapes<T: cgmath::BaseFloat + Sync + Send>(
-    edge_set: ahash::AHashSet<(usize, usize)>,
-    points: Vec<cgmath::Point3<T>>,
+pub fn divide_into_shapes<T: GenericVector3>(
+    edge_set: AHashSet<(usize, usize)>,
+    points: Vec<T>,
 ) -> Result<Vec<LineStringSet3<T>>, CenterlineError> {
     //println!("All edges: {:?}", all_edges);
     // put all edges into a hashmap of Vertices, this will make it possible to
@@ -342,7 +479,7 @@ pub fn divide_into_shapes<T: cgmath::BaseFloat + Sync + Send>(
                 line!()
             )));
         }
-        #[cfg(feature = "hash_drain_filter")]
+        #[cfg(feature = "hash_drain_filter")] // or extract_if
         {
             let drained = vertices
                 .drain_filter(|_, x| {
@@ -387,8 +524,8 @@ pub fn divide_into_shapes<T: cgmath::BaseFloat + Sync + Send>(
             }
             let mut loops = 0;
 
-            let mut rvs = linestring_3d::LineStringSet3::<T>::with_capacity(rvi.len());
-            let mut als = linestring_3d::LineString3::<T>::with_capacity(rvi.len());
+            let mut rvs = LineStringSet3::<T>::with_capacity(rvi.len());
+            let mut als = LineString3::<T>::with_capacity(rvi.len());
 
             let started_with: usize = rvi.iter().next().unwrap().1.id;
             let mut prev: usize;
@@ -438,6 +575,7 @@ pub fn divide_into_shapes<T: cgmath::BaseFloat + Sync + Send>(
         .collect()
 }
 
+#[allow(clippy::type_complexity)]
 #[inline(always)]
 /// Calculate an affine transform that will center, flip plane to XY, and scale the arbitrary shape
 /// so that it will fill the screen. For good measure the scale is then multiplied by 256 so the
@@ -445,47 +583,38 @@ pub fn divide_into_shapes<T: cgmath::BaseFloat + Sync + Send>(
 /// 'desired_voronoi_dimension' is the maximum length of the voronoi input data aabb
 /// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
 /// maintain numerical precision
-pub fn get_transform<F: cgmath::BaseFloat + Sync>(
-    total_aabb: linestring_3d::Aabb3<F>,
-    desired_voronoi_dimension: F,
-) -> Result<
-    (
-        linestring_3d::Plane,
-        cgmath::Matrix4<F>,
-        linestring::linestring_2d::Aabb2<F>,
-    ),
-    CenterlineError,
-> {
+pub fn get_transform<T: GenericVector3 + HasMatrix4>(
+    total_aabb: linestring_3d::Aabb3<T>,
+    desired_voronoi_dimension: T::Scalar,
+) -> Result<(Plane, T::Matrix4Type, Aabb2<T::Vector2>), CenterlineError>
+where
+    T::Scalar: ordered_float::FloatCore,
+{
     get_transform_relaxed(
         total_aabb,
         desired_voronoi_dimension,
-        F::default_epsilon(),
-        F::default_max_ulps(),
+        T::Scalar::default_epsilon(),
+        T::Scalar::default_max_ulps(),
     )
 }
 
+#[allow(clippy::type_complexity)]
 /// Calculate an affine transform that will center, flip plane to XY, and scale the arbitrary shape
 /// so that it will fill the screen. For good measure the scale is then multiplied by 256 so the
 /// points makes half decent input data to boost voronoi (integer input only)
 /// 'desired_voronoi_dimension' is the maximum length of the voronoi input data aabb
 /// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
 /// maintain numerical precision
-pub fn get_transform_relaxed<F: cgmath::BaseFloat + Sync>(
-    total_aabb: linestring_3d::Aabb3<F>,
-    desired_voronoi_dimension: F,
-    epsilon: F,
+pub fn get_transform_relaxed<T: GenericVector3 + HasMatrix4>(
+    total_aabb: linestring_3d::Aabb3<T>,
+    desired_voronoi_dimension: T::Scalar,
+    epsilon: T::Scalar,
     max_ulps: u32,
-) -> Result<
-    (
-        linestring_3d::Plane,
-        cgmath::Matrix4<F>,
-        linestring::linestring_2d::Aabb2<F>,
-    ),
-    CenterlineError,
-> {
-    let plane = if let Some(plane) =
-        linestring_3d::Plane::get_plane_relaxed(total_aabb, epsilon, max_ulps)
-    {
+) -> Result<(Plane, T::Matrix4Type, Aabb2<T::Vector2>), CenterlineError>
+where
+    T::Scalar: ordered_float::FloatCore,
+{
+    let plane = if let Some(plane) = Plane::get_plane_relaxed(total_aabb, epsilon, max_ulps) {
         plane
     } else {
         return Err(CenterlineError::InputNotPLane);
@@ -499,102 +628,98 @@ pub fn get_transform_relaxed<F: cgmath::BaseFloat + Sync>(
     let low = total_aabb.get_low().unwrap();
     let high = total_aabb.get_high().unwrap();
     let delta = high - low;
-    let center = cgmath::point3(
-        (high.x + low.x) / F::from(2.0).unwrap(),
-        (high.y + low.y) / F::from(2.0).unwrap(),
-        (high.z + low.z) / F::from(2.0).unwrap(),
+    let center = T::new_3d(
+        (high.x() + low.x()) / T::Scalar::TWO,
+        (high.y() + low.y()) / T::Scalar::TWO,
+        (high.z() + low.z()) / T::Scalar::TWO,
     );
     println!(
         "Input data AABB: Center:({:?}, {:?}, {:?})",
-        center.x, center.y, center.z,
+        center.x(),
+        center.y(),
+        center.z(),
     );
     println!(
         "                   high:({:?}, {:?}, {:?})",
-        high.x, high.y, high.z,
+        high.x(),
+        high.y(),
+        high.z(),
     );
     println!(
         "                    low:({:?}, {:?}, {:?})",
-        low.x, low.y, low.z,
+        low.x(),
+        low.y(),
+        low.z(),
     );
     println!(
         "                  delta:({:?}, {:?}, {:?})",
-        delta.x, delta.y, delta.z,
+        delta.x(),
+        delta.y(),
+        delta.z(),
     );
 
-    let scale_transform = {
-        let scale = desired_voronoi_dimension
+    let total_transform: T::Matrix4Type = {
+        let scale: T::Scalar = desired_voronoi_dimension
             / std::cmp::max(
-                std::cmp::max(OrderedFloat(delta.x), OrderedFloat(delta.y)),
-                OrderedFloat(delta.z),
+                std::cmp::max(OrderedFloat(delta.x()), OrderedFloat(delta.y())),
+                OrderedFloat(delta.z()),
             )
             .into_inner();
-
-        cgmath::Matrix4::from_scale(scale)
+        T::matrix4_from_scale_center_plane(scale, center, plane)
     };
-
-    let center = scale_transform.transform_point(center);
-    let center_transform: cgmath::Matrix4<F> =
-        cgmath::Matrix4::from_translation(cgmath::Vector3::new(-center.x, -center.y, -center.z));
-
-    let plane_transform: cgmath::Matrix4<F> = {
-        let x = cgmath::Vector4::<F>::new(F::one(), F::zero(), F::zero(), F::zero());
-        let y = cgmath::Vector4::<F>::new(F::zero(), F::one(), F::zero(), F::zero());
-        let z = cgmath::Vector4::<F>::new(F::zero(), F::zero(), F::one(), F::zero());
-        let w = cgmath::Vector4::<F>::new(F::zero(), F::zero(), F::zero(), F::one());
-
-        match plane {
-            linestring_3d::Plane::XY => cgmath::Matrix4::from_cols(x, y, z, w),
-            linestring_3d::Plane::XZ => cgmath::Matrix4::from_cols(x, z, y, w),
-            linestring_3d::Plane::YZ => cgmath::Matrix4::from_cols(z, y, x, w),
-        }
-    };
-
-    let total_transform = plane_transform * center_transform * scale_transform;
-
     let high0 = total_aabb.get_high().unwrap();
     let low0 = total_aabb.get_low().unwrap();
 
-    let low0 = total_transform.transform_point(low0);
-    let high0 = total_transform.transform_point(high0);
+    let low0 = total_transform.transform_point3(low0);
+    let high0 = total_transform.transform_point3(high0);
     let delta0 = high0 - low0;
-    let center0 = cgmath::point3(
-        (high0.x + low0.x) / F::from(2.0).unwrap(),
-        (high0.y + low0.y) / F::from(2.0).unwrap(),
-        (high0.z + low0.z) / F::from(2.0).unwrap(),
+    let center0 = T::new_3d(
+        (high0.x() + low0.x()) / T::Scalar::TWO,
+        (high0.y() + low0.y()) / T::Scalar::TWO,
+        (high0.z() + low0.z()) / T::Scalar::TWO,
     );
     #[cfg(feature = "console_debug")]
-    let center0 = total_transform.transform_point(center0);
+    let center0 = total_transform.transform_point3(center0);
 
     #[cfg(feature = "console_debug")]
     println!(
         "Voronoi input AABB: Center {:?} low:{:?}, high:{:?}",
         center0, low0, high0
     );
-    let mut voronoi_input_aabb =
-        linestring::linestring_2d::Aabb2::new(cgmath::Point2::new(low0.x, low0.y));
-    voronoi_input_aabb.update_point(cgmath::Point2::new(high0.x, high0.y));
+    let voronoi_input_aabb = Aabb2::with_points(&[
+        T::Vector2::new_2d(low0.x(), low0.y()),
+        T::Vector2::new_2d(high0.x(), high0.y()),
+    ]);
 
     println!(
         "Voronoi input AABB: Center:({:?}, {:?}, {:?})",
-        center0.x, center0.y, center0.z,
+        center0.x(),
+        center0.y(),
+        center0.z(),
     );
     println!(
         "                   high:({:?}, {:?}, {:?})",
-        high0.x, high0.y, high0.z,
+        high0.x(),
+        high0.y(),
+        high0.z(),
     );
     println!(
         "                    low:({:?}, {:?}, {:?})",
-        low0.x, low0.y, low0.z,
+        low0.x(),
+        low0.y(),
+        low0.z(),
     );
     println!(
         "                  delta:({:?}, {:?}, {:?})",
-        delta0.x, delta0.y, delta0.z,
+        delta0.x(),
+        delta0.y(),
+        delta0.z(),
     );
 
-    let inverse_total = total_transform.invert();
-    if inverse_total.is_none() {
+    //let inverse_total = total_transform.inverse();
+    /*if inverse_total.is_none() {
         return Err(CenterlineError::CouldNotCalculateInverseMatrix);
-    }
+    }*/
     //let inverse_total = inverse_total.unwrap();
 
     //let low0 = inverse_total.transform_point(low0);
@@ -607,9 +732,12 @@ pub fn get_transform_relaxed<F: cgmath::BaseFloat + Sync>(
 
 /// try to consolidate shapes. If one AABB and convex hull (a) totally engulfs another shape (b)
 /// we put shape (b) inside (a)
-pub fn consolidate_shapes<F: cgmath::BaseFloat + Sync>(
-    mut raw_data: Vec<linestring::linestring_2d::LineStringSet2<F>>,
-) -> Result<Vec<linestring::linestring_2d::LineStringSet2<F>>, CenterlineError> {
+pub fn consolidate_shapes<T: GenericVector2>(
+    mut raw_data: Vec<LineStringSet2<T>>,
+) -> Result<Vec<LineStringSet2<T>>, CenterlineError>
+where
+    T::Scalar: UlpsEq,
+{
     //for shape in raw_data.iter().enumerate() {
     //    println!("Shape #{} aabb:{:?}", shape.0, shape.1.get_aabb());
     //}
@@ -619,35 +747,29 @@ pub fn consolidate_shapes<F: cgmath::BaseFloat + Sync>(
             for j in i + 1..raw_data.len() {
                 //println!("testing #{} vs #{}", i, j);
                 if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb())
-                    && linestring::linestring_2d::convex_hull::ConvexHull::contains(
+                    && convex_hull::contains_convex_hull(
                         raw_data[i].get_convex_hull().as_ref().unwrap(),
                         raw_data[j].get_convex_hull().as_ref().unwrap(),
-                        F::default_epsilon() * F::from(2.0).unwrap(),
-                        F::default_max_ulps() * 2,
                     )
                 {
                     //println!("#{} contains #{}", i, j);
                     // move stuff from j to i via a temp because of borrow checker
-                    let mut stolen_line_j = linestring::linestring_2d::LineStringSet2::steal_from(
-                        raw_data.get_mut(j).unwrap(),
-                    );
+                    let mut stolen_line_j =
+                        LineStringSet2::steal_from(raw_data.get_mut(j).unwrap());
                     let line_i = raw_data.get_mut(i).unwrap();
                     line_i.take_from_internal(&mut stolen_line_j)?;
                     let _ = raw_data.remove(j);
                     continue 'outer_loop;
                 } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb())
-                    && linestring::linestring_2d::convex_hull::ConvexHull::contains(
+                    && convex_hull::contains_convex_hull(
                         raw_data[j].get_convex_hull().as_ref().unwrap(),
                         raw_data[i].get_convex_hull().as_ref().unwrap(),
-                        F::default_epsilon() * F::from(2.0).unwrap(),
-                        F::default_max_ulps() * 2,
                     )
                 {
                     //println!("#{} contains #{}", j, i);
                     // move stuff from i to j via a temp because of borrow checker
-                    let mut stolen_line_i = linestring::linestring_2d::LineStringSet2::steal_from(
-                        raw_data.get_mut(i).unwrap(),
-                    );
+                    let mut stolen_line_i =
+                        LineStringSet2::steal_from(raw_data.get_mut(i).unwrap());
                     let line_j = raw_data.get_mut(j).unwrap();
                     line_j.take_from_internal(&mut stolen_line_i)?;
                     let _ = raw_data.remove(i);
@@ -665,15 +787,18 @@ pub fn consolidate_shapes<F: cgmath::BaseFloat + Sync>(
 ///     * Filter out voronoi edges based on the angle to input geometry.
 ///     * Collects connected edges into line strings and line segments.
 ///     * Performs line simplification on those line strings.
-pub struct Centerline<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> {
+pub struct Centerline<I: BV::InputType, T: GenericVector3>
+where
+    T::Scalar: OutputType,
+{
     /// the input data to the voronoi diagram
     pub segments: Vec<BV::Line<I>>,
     /// the voronoi diagram itself
-    pub diagram: BV::SyncDiagram<F>,
+    pub diagram: BV::SyncDiagram<T::Scalar>,
     /// the individual two-point edges
-    pub lines: Option<Vec<Line3<F>>>,
+    pub lines: Option<Vec<Line3<T>>>,
     /// concatenated connected edges
-    pub line_strings: Option<Vec<LineString3<F>>>,
+    pub line_strings: Option<Vec<LineString3<T>>>,
 
     /// bit field defining edges rejected by EXTERNAL or INFINITE
     rejected_edges: Option<Vob32>,
@@ -681,31 +806,40 @@ pub struct Centerline<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> {
     ignored_edges: Option<Vob32>,
 
     #[cfg(feature = "console_debug")]
-    pub debug_edges: Option<ahash::AHashMap<usize, [F; 4]>>,
+    pub debug_edges: Option<ahash::AHashMap<usize, [T::Scalar; 4]>>,
 }
 
-impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
+impl<I: BV::InputType, T3: GenericVector3> Default for Centerline<I, T3>
+where
+    T3::Scalar: OutputType,
+{
     /// Creates a Centerline container with a set of segments
-    pub fn default() -> Self {
+    fn default() -> Self {
         Self {
             diagram: BV::SyncDiagram::default(),
             segments: Vec::<BV::Line<I>>::default(),
-            lines: Some(Vec::<Line3<F>>::new()),
-            line_strings: Some(Vec::<LineString3<F>>::new()),
+            lines: Some(Vec::<Line3<T3>>::new()),
+            line_strings: Some(Vec::<LineString3<T3>>::new()),
             rejected_edges: None,
             ignored_edges: None,
             #[cfg(feature = "console_debug")]
             debug_edges: None,
         }
     }
+}
 
+impl<I: BV::InputType, T3: GenericVector3> Centerline<I, T3>
+where
+    T3::Scalar: OutputType,
+    I: AsPrimitive<T3::Scalar>,
+{
     /// Creates a Centerline container with a set of segments
     pub fn with_segments(segments: Vec<BV::Line<I>>) -> Self {
         Self {
             diagram: BV::SyncDiagram::default(),
             segments,
-            lines: Some(Vec::<Line3<F>>::new()),
-            line_strings: Some(Vec::<LineString3<F>>::new()),
+            lines: Some(Vec::<Line3<T3>>::new()),
+            line_strings: Some(Vec::<LineString3<T3>>::new()),
             rejected_edges: None,
             ignored_edges: None,
             #[cfg(feature = "console_debug")]
@@ -741,25 +875,19 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
 
     /// perform the angle-to-geometry test and filter out some edges.
     /// Collect the rest of the edges into connected line-strings and line segments.
+    #[allow(clippy::type_complexity)]
     pub fn calculate_centerline(
         &mut self,
-        cos_angle: F,
-        discrete_limit: F,
-        ignored_regions: Option<
-            &Vec<(
-                linestring::linestring_2d::Aabb2<F>,
-                linestring::linestring_2d::LineString2<F>,
-            )>,
-        >,
+        cos_angle: T3::Scalar,
+        discrete_limit: T3::Scalar,
+        ignored_regions: Option<&Vec<(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)>>,
     ) -> Result<(), CenterlineError> {
         self.angle_test(cos_angle)?;
         if let Some(ignored_regions) = ignored_regions {
             self.traverse_edges(discrete_limit, ignored_regions)?;
         } else {
-            let ignored_regions = Vec::<(
-                linestring::linestring_2d::Aabb2<F>,
-                linestring::linestring_2d::LineString2<F>,
-            )>::with_capacity(0);
+            let ignored_regions =
+                Vec::<(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)>::with_capacity(0);
             self.traverse_edges(discrete_limit, &ignored_regions)?;
         }
         Ok(())
@@ -769,25 +897,19 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     /// This version of calculate_centerline() tries to keep as many edges as possible.
     /// The intention is to use the data for mesh generation.
     /// TODO: make this return a true mesh
+    #[allow(clippy::type_complexity)]
     pub fn calculate_centerline_mesh(
         &mut self,
-        discrete_limit: F,
-        ignored_regions: Option<
-            &Vec<(
-                linestring::linestring_2d::Aabb2<F>,
-                linestring::linestring_2d::LineString2<F>,
-            )>,
-        >,
+        discrete_limit: T3::Scalar,
+        ignored_regions: Option<&Vec<(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)>>,
     ) -> Result<(), CenterlineError> {
         self.ignored_edges = self.rejected_edges.clone();
 
         if let Some(ignored_regions) = ignored_regions {
             self.traverse_cells(discrete_limit, ignored_regions)?;
         } else {
-            let ignored_regions = Vec::<(
-                linestring::linestring_2d::Aabb2<F>,
-                linestring::linestring_2d::LineString2<F>,
-            )>::with_capacity(0);
+            let ignored_regions =
+                Vec::<(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)>::with_capacity(0);
             self.traverse_cells(discrete_limit, &ignored_regions)?;
         }
         Ok(())
@@ -820,7 +942,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     }
 
     /// returns a reference to the internal voronoi diagram
-    pub fn diagram(&self) -> &BV::SyncDiagram<F> {
+    pub fn diagram(&self) -> &BV::SyncDiagram<T3::Scalar> {
         &self.diagram
     }
 
@@ -857,7 +979,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     /// a predefined value.
     /// TODO: there must be a quicker way to get this information from the voronoi diagram
     /// maybe mark each vertex identical to input points..
-    fn angle_test(&mut self, cos_angle: F) -> Result<(), CenterlineError> {
+    fn angle_test(&mut self, cos_angle: T3::Scalar) -> Result<(), CenterlineError> {
         let mut ignored_edges = self.rejected_edges.clone().take().unwrap();
 
         for cell in self.diagram.cells().iter() {
@@ -867,14 +989,8 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                 continue;
             }
             let segment = self.retrieve_segment(cell_id)?;
-            let point0 = cgmath::Point2 {
-                x: Self::i2f(segment.start.x),
-                y: Self::i2f(segment.start.y),
-            };
-            let point1 = cgmath::Point2 {
-                x: Self::i2f(segment.end.x),
-                y: Self::i2f(segment.end.y),
-            };
+            let point0 = T3::Vector2::new_2d(segment.start.x.as_(), segment.start.y.as_());
+            let point1 = T3::Vector2::new_2d(segment.end.x.as_(), segment.end.y.as_());
 
             if let Some(incident_e) = cell.get_incident_edge() {
                 //println!("incident_e {:?}", incident_e);
@@ -890,13 +1006,13 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                             .edge_get_vertex0(e)?
                             .map(|x| self.diagram.vertex_get(x))
                         {
-                            let vertex0 = cgmath::Point2::<F>::from(vertex0);
+                            let vertex0 = T3::Vector2::new_2d(vertex0.x(), vertex0.y());
                             if let Some(Ok(vertex1)) = self
                                 .diagram
                                 .edge_get_vertex1(e)?
                                 .map(|x| self.diagram.vertex_get(x))
                             {
-                                let vertex1 = cgmath::Point2::<F>::from(vertex1);
+                                let vertex1 = T3::Vector2::new_2d(vertex1.x(), vertex1.y());
                                 let _ = self.angle_test_6(
                                     cos_angle,
                                     &mut ignored_edges,
@@ -948,15 +1064,15 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     #[allow(clippy::too_many_arguments)]
     fn angle_test_6(
         &self,
-        cos_angle: F,
+        cos_angle: T3::Scalar,
         ignored_edges: &mut Vob32,
         edge_id: BV::EdgeIndex,
-        vertex0: cgmath::Point2<F>,
-        vertex1: cgmath::Point2<F>,
-        s_point_0: cgmath::Point2<F>,
-        s_point_1: cgmath::Point2<F>,
+        vertex0: T3::Vector2,
+        vertex1: T3::Vector2,
+        s_point_0: T3::Vector2,
+        s_point_1: T3::Vector2,
     ) -> Result<bool, CenterlineError> {
-        if cgmath::ulps_eq!(vertex0.x, s_point_0.x) && cgmath::ulps_eq!(vertex0.y, s_point_0.y) {
+        if ulps_eq!(vertex0.x(), s_point_0.x()) && ulps_eq!(vertex0.y(), s_point_0.y()) {
             // todo better to compare to the square of the dot product, fewer operations.
             let segment_v = (s_point_1 - s_point_0).normalize();
             let vertex_v = (vertex1 - vertex0).normalize();
@@ -1045,37 +1161,26 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     }
 
     /// returns true if *all* of the 'edges' are contained inside one of the 'ignored_regions'
+    #[allow(clippy::type_complexity)]
     fn edges_are_inside_ignored_region(
         &self,
         edges: &Vob32,
-        ignored_regions: &[(
-            linestring::linestring_2d::Aabb2<F>,
-            linestring::linestring_2d::LineString2<F>,
-        )],
+        ignored_regions: &[(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)],
     ) -> Result<bool, CenterlineError> {
         let is_inside_region = |edge: BV::EdgeIndex,
-                                region: &(
-            linestring::linestring_2d::Aabb2<F>,
-            linestring::linestring_2d::LineString2<F>,
-        )|
+                                region: &(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)|
          -> Result<bool, CenterlineError> {
             let v0 = self.diagram.edge_get_vertex0(edge)?.unwrap();
             let v0 = self.diagram.vertex_get(v0).unwrap();
-            let v0 = cgmath::Point2 {
-                x: v0.x(),
-                y: v0.y(),
-            };
+            let v0 = T3::Vector2::new_2d(v0.x(), v0.y());
 
             let v1 = self.diagram.edge_get_vertex0(edge)?.unwrap();
             let v1 = self.diagram.vertex_get(v1).unwrap();
-            let v1 = cgmath::Point2 {
-                x: v1.x(),
-                y: v1.y(),
-            };
+            let v1 = T3::Vector2::new_2d(v1.x(), v1.y());
             Ok(region.0.contains_point_inclusive(v0)
                 && region.0.contains_point_inclusive(v1)
-                && convex_hull::ConvexHull::contains_point_inclusive(&region.1, v0)
-                && convex_hull::ConvexHull::contains_point_inclusive(&region.1, v1))
+                && convex_hull::contains_point_inclusive(&region.1, v0)
+                && convex_hull::contains_point_inclusive(&region.1, v1))
         };
 
         'outer: for region in ignored_regions.iter().enumerate() {
@@ -1092,13 +1197,11 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     }
 
     /// move across each edge and sample the lines and arcs
+    #[allow(clippy::type_complexity)]
     fn traverse_edges(
         &mut self,
-        maxdist: F,
-        ignored_regions: &[(
-            linestring::linestring_2d::Aabb2<F>,
-            linestring::linestring_2d::LineString2<F>,
-        )],
+        maxdist: T3::Scalar,
+        ignored_regions: &[(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
         let mut lines = self.lines.take().ok_or_else(|| {
@@ -1122,7 +1225,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
             .unwrap_or_else(|| Vob32::fill(self.diagram.edges().len()));
 
         #[cfg(feature = "console_debug")]
-        let edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
+        let edge_lines = ahash::AHashMap::<usize, [T3::Scalar; 4]>::default();
 
         linestrings.clear();
         lines.clear();
@@ -1228,13 +1331,11 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     }
 
     /// move across each cell and sample the lines and arcs
+    #[allow(clippy::type_complexity)]
     fn traverse_cells(
         &mut self,
-        maxdist: F,
-        ignored_regions: &[(
-            linestring::linestring_2d::Aabb2<F>,
-            linestring::linestring_2d::LineString2<F>,
-        )],
+        max_dist: T3::Scalar,
+        ignored_regions: &[(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
         let mut lines = self.lines.take().ok_or_else(|| {
@@ -1255,7 +1356,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
         let mut ignored_edges = self.ignored_edges.take().unwrap_or_else(|| Vob32::fill(0));
 
         #[cfg(feature = "console_debug")]
-        let edge_lines = ahash::AHashMap::<usize, [F; 4]>::default();
+        let edge_lines = ahash::AHashMap::<usize, [T3::Scalar; 4]>::default();
 
         linestrings.clear();
         lines.clear();
@@ -1303,7 +1404,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                 &mut used_edges,
                 &mut lines,
                 &mut linestrings,
-                maxdist,
+                max_dist,
             )?;
         }
 
@@ -1327,7 +1428,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                 &mut used_edges,
                 &mut lines,
                 &mut linestrings,
-                maxdist,
+                max_dist,
             )?;
         }
 
@@ -1394,9 +1495,9 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
         force_seed_edge: bool,
         ignored_edges: &Vob32,
         used_edges: &mut Vob32,
-        lines: &mut Vec<Line3<F>>,
-        linestrings: &mut Vec<LineString3<F>>,
-        maxdist: F,
+        lines: &mut Vec<Line3<T3>>,
+        linestrings: &mut Vec<LineString3<T3>>,
+        maxdist: T3::Scalar,
     ) -> Result<(), CenterlineError> {
         #[cfg(feature = "console_debug")]
         {
@@ -1483,7 +1584,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                                 next_edge = self.diagram.edge_get(e)?.next()?;
                             } else {
                                 // terminating the line string, pushing candidates
-                                let _ = self.convert_edges_to_lines(
+                                self.convert_edges_to_lines(
                                     &current_edge_set,
                                     lines,
                                     linestrings,
@@ -1515,7 +1616,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                         }
                         _ => {
                             // to many or too few intersections found, end this linestring and push the new candidates to the queue
-                            let _ = self.convert_edges_to_lines(
+                            self.convert_edges_to_lines(
                                 &current_edge_set,
                                 lines,
                                 linestrings,
@@ -1578,9 +1679,9 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     fn convert_edges_to_lines(
         &self,
         edges: &[BV::EdgeIndex],
-        lines: &mut Vec<Line3<F>>,
-        linestrings: &mut Vec<LineString3<F>>,
-        maxdist: F,
+        lines: &mut Vec<Line3<T3>>,
+        linestrings: &mut Vec<LineString3<T3>>,
+        maxdist: T3::Scalar,
     ) -> Result<(), CenterlineError> {
         #[cfg(feature = "console_debug")]
         {
@@ -1598,7 +1699,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                 match self.convert_edge_to_shape(edge) {
                     Ok(linestring_3d::Shape3d::Line(l)) => lines.push(l),
                     Ok(linestring_3d::Shape3d::ParabolicArc(a)) => {
-                        linestrings.push(a.discretise_3d(maxdist));
+                        linestrings.push(a.discretize_3d(maxdist));
                     }
                     Ok(linestring_3d::Shape3d::Linestring(_s)) => {
                         panic!();
@@ -1609,7 +1710,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                 }
             }
             _ => {
-                let mut ls = LineString3::<F>::default();
+                let mut ls = LineString3::<T3>::default();
                 for edge_id in edges.iter() {
                     let edge = self.diagram.edge_get(*edge_id)?;
                     match self.convert_edge_to_shape(edge)? {
@@ -1621,7 +1722,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                         }
                         linestring_3d::Shape3d::ParabolicArc(a) => {
                             //println!("->got {:?}", a);
-                            ls.append(a.discretise_3d(maxdist));
+                            ls.append(a.discretize_3d(maxdist));
                             //println!("<-got");
                         }
                         // should not happen
@@ -1644,7 +1745,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     fn convert_edge_to_shape(
         &self,
         edge: &BV::Edge,
-    ) -> Result<linestring_3d::Shape3d<F>, CenterlineError> {
+    ) -> Result<linestring_3d::Shape3d<T3>, CenterlineError> {
         let edge_id = edge.id();
         let edge_twin_id = self.diagram.edge_get_twin(edge_id)?;
 
@@ -1674,14 +1775,8 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
             vertex1.get_id().0,
         );
 
-        let start_point = cgmath::Point2 {
-            x: vertex0.x(),
-            y: vertex0.y(),
-        };
-        let end_point = cgmath::Point2 {
-            x: vertex1.x(),
-            y: vertex1.y(),
-        };
+        let start_point = T3::Vector2::new_2d(vertex0.x(), vertex0.y());
+        let end_point = T3::Vector2::new_2d(vertex1.x(), vertex1.y());
         let cell_id = self.diagram.edge_get(edge_id)?.cell().unwrap();
         let cell = self.diagram.cell_get(cell_id)?;
         let twin_cell_id = self.diagram.edge_get(edge_twin_id)?.cell().unwrap();
@@ -1705,36 +1800,27 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
             self.retrieve_segment(cell_id)?
         };
 
-        let segment_start_point = cgmath::Point2 {
-            x: Self::i2f(segment.start.x),
-            y: Self::i2f(segment.start.y),
-        };
-        let segment_end_point = cgmath::Point2 {
-            x: Self::i2f(segment.end.x),
-            y: Self::i2f(segment.end.y),
-        };
-        let cell_point = cgmath::Point2 {
-            x: Self::i2f(cell_point.x),
-            y: Self::i2f(cell_point.y),
-        };
+        let segment_start_point = T3::Vector2::new_2d(segment.start.x.as_(), segment.start.y.as_());
+        let segment_end_point = T3::Vector2::new_2d(segment.end.x.as_(), segment.end.y.as_());
+        let cell_point = T3::Vector2::new_2d(cell_point.x.as_(), cell_point.y.as_());
         #[cfg(feature = "console_debug")]
         {
-            println!("sp:[{},{}]", start_point.x, start_point.y);
-            println!("ep:[{},{}]", end_point.x, end_point.y);
+            println!("sp:[{},{}]", start_point.x(), start_point.y());
+            println!("ep:[{},{}]", end_point.x(), end_point.y());
             println!(
                 "cp:[{},{}] sg:[{},{},{},{}]",
-                cell_point.x,
-                cell_point.y,
-                segment_start_point.x,
-                segment_start_point.y,
-                segment_end_point.x,
-                segment_end_point.y
+                cell_point.x(),
+                cell_point.y(),
+                segment_start_point.x(),
+                segment_start_point.y(),
+                segment_end_point.x(),
+                segment_end_point.y()
             );
         }
 
         if edge.is_curved() {
             let arc = linestring_2d::VoronoiParabolicArc::new(
-                linestring_2d::Line2 {
+                Line2 {
                     start: segment_start_point,
                     end: segment_end_point,
                 },
@@ -1748,25 +1834,18 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
         } else {
             let distance_to_start = {
                 if vertex0.is_site_point() {
-                    F::zero()
+                    T3::Scalar::ZERO
                 } else if cell.contains_point() {
                     let cell_point = self.retrieve_point(cell_id)?;
-                    let cell_point = cgmath::Point2 {
-                        x: Self::i2f(cell_point.x),
-                        y: Self::i2f(cell_point.y),
-                    };
+                    let cell_point = T3::Vector2::new_2d(cell_point.x.as_(), cell_point.y.as_());
                     -cell_point.distance(start_point)
                 } else {
                     let segment = self.retrieve_segment(cell_id)?;
-                    let segment_start_point = cgmath::Point2 {
-                        x: Self::i2f(segment.start.x),
-                        y: Self::i2f(segment.start.y),
-                    };
-                    let segment_end_point = cgmath::Point2 {
-                        x: Self::i2f(segment.end.x),
-                        y: Self::i2f(segment.end.y),
-                    };
-                    -linestring::linestring_2d::distance_to_line_squared_safe(
+                    let segment_start_point =
+                        T3::Vector2::new_2d(segment.start.x.as_(), segment.start.y.as_());
+                    let segment_end_point =
+                        T3::Vector2::new_2d(segment.end.x.as_(), segment.end.y.as_());
+                    -linestring_2d::distance_to_line_squared_safe(
                         segment_start_point,
                         segment_end_point,
                         start_point,
@@ -1776,7 +1855,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
             };
             let distance_to_end = {
                 if vertex1.is_site_point() {
-                    F::zero()
+                    T3::Scalar::ZERO
                 } else {
                     let cell_id = self
                         .diagram
@@ -1786,22 +1865,16 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                     let cell = self.diagram.cell_get(cell_id)?;
                     if cell.contains_point() {
                         let cell_point = self.retrieve_point(cell_id)?;
-                        let cell_point = cgmath::Point2 {
-                            x: Self::i2f(cell_point.x),
-                            y: Self::i2f(cell_point.y),
-                        };
+                        let cell_point =
+                            T3::Vector2::new_2d(cell_point.x.as_(), cell_point.y.as_());
                         -cell_point.distance(end_point)
                     } else {
                         let segment = self.retrieve_segment(cell_id)?;
-                        let segment_start_point = cgmath::Point2 {
-                            x: Self::i2f(segment.start.x),
-                            y: Self::i2f(segment.start.y),
-                        };
-                        let segment_end_point = cgmath::Point2 {
-                            x: Self::i2f(segment.end.x),
-                            y: Self::i2f(segment.end.y),
-                        };
-                        -linestring::linestring_2d::distance_to_line_squared_safe(
+                        let segment_start_point =
+                            T3::Vector2::new_2d(segment.start.x.as_(), segment.start.y.as_());
+                        let segment_end_point =
+                            T3::Vector2::new_2d(segment.end.x.as_(), segment.end.y.as_());
+                        -linestring_2d::distance_to_line_squared_safe(
                             segment_start_point,
                             segment_end_point,
                             end_point,
@@ -1811,25 +1884,12 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                 }
             };
             let line = Line3 {
-                start: cgmath::Point3 {
-                    x: start_point.x,
-                    y: start_point.y,
-                    z: distance_to_start,
-                },
-                end: cgmath::Point3 {
-                    x: end_point.x,
-                    y: end_point.y,
-                    z: distance_to_end,
-                },
+                start: T3::new_3d(start_point.x(), start_point.y(), distance_to_start),
+                end: T3::new_3d(end_point.x(), end_point.y(), distance_to_end),
             };
             #[cfg(feature = "console_debug")]
             println!("Converted {:?} to {:?}", edge.id().0, line);
             Ok(linestring_3d::Shape3d::Line(line))
         }
-    }
-
-    #[inline(always)]
-    pub fn i2f(input: I) -> F {
-        num_traits::cast::<I, F>(input).unwrap()
     }
 }

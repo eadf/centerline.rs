@@ -1,11 +1,8 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-
 use boostvoronoi::prelude::*;
 use centerline::Centerline;
-use vector_traits::glam;
 
 #[cfg(test)]
-fn bench_1(c: &mut Criterion) {
+fn segments() -> [[i32; 4]; 352] {
     let segments: [[i32; 4]; 352] = [
         [402, 20, 395, 20],
         [408, 23, 402, 20],
@@ -360,24 +357,77 @@ fn bench_1(c: &mut Criterion) {
         [397, 780, 404, 779],
         [556, 238, 529, 222],
     ];
-    let segments: Vec<Line<i32>> = segments.iter().map(|x| x.into()).collect();
-
-    let mut centerline = Centerline::<i32, glam::Vec3>::with_segments(segments);
-    c.bench_function("bench1", |b| {
-        b.iter(|| {
-            centerline.build_voronoi().expect("bench_1");
-            let normalized_dot_product_limit: f32 = 0.38;
-            let centerline_simplification: f32 = 0.1;
-            let _ = centerline
-                .calculate_centerline(
-                    normalized_dot_product_limit,
-                    centerline_simplification,
-                    None,
-                )
-                .expect("bench_1");
-        })
-    });
+    segments
 }
 
-criterion_group!(benches1, bench_1);
-criterion_main!(benches1);
+#[test]
+fn test_glam_f32() {
+    use vector_traits::glam;
+    let segments: Vec<Line<i32>> = segments().into_iter().map(|x| x.into()).collect();
+
+    let mut centerline = Centerline::<i32, glam::Vec3>::with_segments(segments);
+    centerline.build_voronoi().unwrap();
+    let normalized_dot_product_limit: f32 = 0.38;
+    let centerline_simplification: f32 = 0.1;
+    centerline
+        .calculate_centerline(
+            normalized_dot_product_limit,
+            centerline_simplification,
+            None,
+        )
+        .unwrap();
+}
+
+#[test]
+fn test_glam_f64() {
+    use vector_traits::glam;
+    let segments: Vec<Line<i32>> = segments().into_iter().map(|x| x.into()).collect();
+
+    let mut centerline = Centerline::<i32, glam::DVec3>::with_segments(segments);
+    centerline.build_voronoi().unwrap();
+    let normalized_dot_product_limit: f64 = 0.38;
+    let centerline_simplification: f64 = 0.1;
+    centerline
+        .calculate_centerline(
+            normalized_dot_product_limit,
+            centerline_simplification,
+            None,
+        )
+        .unwrap()
+}
+
+#[test]
+fn test_cgmath_f32() {
+    use vector_traits::cgmath;
+    let segments: Vec<Line<i32>> = segments().into_iter().map(|x| x.into()).collect();
+
+    let mut centerline = Centerline::<i32, cgmath::Vector3<f32>>::with_segments(segments);
+    centerline.build_voronoi().unwrap();
+    let normalized_dot_product_limit: f32 = 0.38;
+    let centerline_simplification: f32 = 0.1;
+    centerline
+        .calculate_centerline(
+            normalized_dot_product_limit,
+            centerline_simplification,
+            None,
+        )
+        .unwrap()
+}
+
+#[test]
+fn test_cgmath_f64() {
+    use vector_traits::cgmath;
+    let segments: Vec<Line<i32>> = segments().into_iter().map(|x| x.into()).collect();
+
+    let mut centerline = Centerline::<i32, cgmath::Vector3<f64>>::with_segments(segments);
+    centerline.build_voronoi().unwrap();
+    let normalized_dot_product_limit: f64 = 0.38;
+    let centerline_simplification: f64 = 0.1;
+    centerline
+        .calculate_centerline(
+            normalized_dot_product_limit,
+            centerline_simplification,
+            None,
+        )
+        .unwrap()
+}
