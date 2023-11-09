@@ -395,7 +395,7 @@ where
                         draw::set_draw_color(Color::Dark1);
                         let aabb: Vec<<T as GenericVector3>::Vector2> =
                             shape.raw_data.get_aabb().clone().into();
-                        for a_line in aabb.line_iter() {
+                        for a_line in aabb.window_iter() {
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
                                     a_line.start.x() as T::Scalar,
@@ -416,7 +416,7 @@ where
                         draw::set_line_style(LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark2);
                         if let Some(ref hull) = shape.raw_data.get_convex_hull() {
-                            for a_line in hull.line_iter() {
+                            for a_line in hull.window_iter() {
                                 draw_fn(
                                     data_bm.affine.transform_ab_a([
                                         a_line.start.x(),
@@ -438,7 +438,7 @@ where
                         if let Some(shape_internals) = shape.raw_data.get_internals() {
                             draw::set_draw_color(Color::Green);
                             for hull in shape_internals.iter() {
-                                for a_line in hull.1.line_iter() {
+                                for a_line in hull.1.window_iter() {
                                     draw_fn(
                                         data_bm.affine.transform_ab_a([
                                             a_line.start.x(),
@@ -926,7 +926,7 @@ where
                     before,
                     s_lines.0.len()
                 );
-                for lineseq in s_lines.line_iter() {
+                for lineseq in s_lines.window_iter() {
                     centerline.segments.push(boostvoronoi::Line::new(
                         boostvoronoi::Point {
                             x: lineseq.start.x().as_(),
@@ -941,7 +941,7 @@ where
             } else {
                 #[cfg(feature = "console_debug")]
                 println!("no reduction");
-                for lineseq in lines.line_iter() {
+                for lineseq in lines.window_iter() {
                     centerline.segments.push(boostvoronoi::Line::new(
                         boostvoronoi::Point {
                             x: lineseq.start.x().as_(),
