@@ -49,14 +49,14 @@ use fltk::app::redraw;
 use fltk::enums::*;
 use fltk::group::Pack;
 use fltk::valuator::HorNiceSlider;
-use fltk::*;
-use fltk::{app, draw::*, frame::*, prelude::*};
+use fltk::{app, dialog, draw, draw::*, frame::*, menu, window};
 
 use boostvoronoi::{InputType, OutputType};
 use fltk::app::MouseWheel;
 use fltk::button::RoundButton;
 use fltk::dialog::FileDialogType;
 use fltk::menu::MenuButton;
+use fltk::prelude::{GroupExt, MenuExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
 #[allow(unused_imports)]
 use itertools::Itertools;
 use linestring::linestring_2d::{Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
@@ -72,8 +72,7 @@ use std::rc::Rc;
 use obj;
 #[allow(unused_imports)]
 use vector_traits::glam::{DVec3, Vec3};
-use vector_traits::num_traits::float::FloatCore;
-use vector_traits::num_traits::{AsPrimitive, FloatConst};
+use vector_traits::num_traits::{AsPrimitive, Float, FloatConst};
 use vector_traits::{GenericScalar, GenericVector3, HasXY};
 
 #[macro_use]
@@ -394,9 +393,9 @@ where
                     {
                         draw::set_line_style(LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark1);
-                        let aabb: LineString2<<T as GenericVector3>::Vector2> =
+                        let aabb: Vec<<T as GenericVector3>::Vector2> =
                             shape.raw_data.get_aabb().clone().into();
-                        for a_line in aabb.iter() {
+                        for a_line in aabb.line_iter() {
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
                                     a_line.start.x() as T::Scalar,
@@ -417,7 +416,7 @@ where
                         draw::set_line_style(LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark2);
                         if let Some(ref hull) = shape.raw_data.get_convex_hull() {
-                            for a_line in hull.iter() {
+                            for a_line in hull.line_iter() {
                                 draw_fn(
                                     data_bm.affine.transform_ab_a([
                                         a_line.start.x(),
@@ -439,7 +438,7 @@ where
                         if let Some(shape_internals) = shape.raw_data.get_internals() {
                             draw::set_draw_color(Color::Green);
                             for hull in shape_internals.iter() {
-                                for a_line in hull.1.iter() {
+                                for a_line in hull.1.line_iter() {
                                     draw_fn(
                                         data_bm.affine.transform_ab_a([
                                             a_line.start.x(),
@@ -927,7 +926,7 @@ where
                     before,
                     s_lines.0.len()
                 );
-                for lineseq in s_lines.iter() {
+                for lineseq in s_lines.line_iter() {
                     centerline.segments.push(boostvoronoi::Line::new(
                         boostvoronoi::Point {
                             x: lineseq.start.x().as_(),
@@ -942,7 +941,7 @@ where
             } else {
                 #[cfg(feature = "console_debug")]
                 println!("no reduction");
-                for lineseq in lines.iter() {
+                for lineseq in lines.line_iter() {
                     centerline.segments.push(boostvoronoi::Line::new(
                         boostvoronoi::Point {
                             x: lineseq.start.x().as_(),
@@ -998,7 +997,9 @@ where
     if let Some(inverse_transform) = transform.safe_inverse() {
         shared_data_bm.configuration.inverse_transform = inverse_transform;
     } else {
-        return Err(CenterlineError::CouldNotCalculateInverseMatrix);
+        return Err(CenterlineError::CouldNotCalculateInverseMatrix(
+            "".to_string(),
+        ));
     }
 
     // transform each linestring to 2d
@@ -1023,7 +1024,7 @@ where
     let raw_data: Vec<LineStringSet2<<T as GenericVector3>::Vector2>> = raw_data
         .into_par_iter()
         .map(|mut x| {
-            x.calculate_convex_hull();
+            x.calculate_convex_hull().unwrap();
             x
         })
         .collect();

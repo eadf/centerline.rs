@@ -58,7 +58,7 @@ limitations under the License.
 use ahash::AHashSet;
 use boostvoronoi as BV;
 use boostvoronoi::OutputType;
-use linestring::linestring_2d::{self, convex_hull, Aabb2, Line2, LineString2, LineStringSet2};
+use linestring::linestring_2d::{self, convex_hull, Aabb2, Line2, LineStringSet2};
 use linestring::linestring_3d::{self, Line3, LineString3, LineStringSet3, Plane};
 use ordered_float::OrderedFloat;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -77,25 +77,25 @@ extern crate bitflags;
 
 #[derive(Error, Debug)]
 pub enum CenterlineError {
-    #[error("Something is wrong with the internal logic")]
+    #[error("Something is wrong with the internal logic {0}")]
     InternalError(String),
 
-    #[error("Something is wrong with the input data")]
-    CouldNotCalculateInverseMatrix,
+    #[error("Something is wrong with the input data {0}")]
+    CouldNotCalculateInverseMatrix(String),
 
-    #[error("Your line-strings are self-intersecting.")]
-    SelfIntersectingData,
+    #[error("Your line-strings are self-intersecting {0}")]
+    SelfIntersectingData(String),
 
-    #[error("The input data is not 2D")]
-    InputNotPLane,
+    #[error("The input data is not 2D {0}")]
+    InputNotPLane(String),
 
-    #[error("Invalid data")]
+    #[error("Invalid data {0}")]
     InvalidData(String),
 
     #[error(transparent)]
     BvError(#[from] BV::BvError),
 
-    #[error("Error from .obj file handling")]
+    #[error("Error from .obj file handling {0}")]
     ObjError(String),
 
     #[error(transparent)]
@@ -540,10 +540,11 @@ pub fn divide_into_shapes<T: GenericVector3>(
                     als.push(points[current]);
 
                     //assert_eq!(newV.edges.len(),2);
-                    next = *current_vertex.connected_vertices.iter().find(|x| **x != prev).ok_or_else(||
+                    next = *current_vertex.connected_vertices.iter().find(|x| **x != prev).ok_or_else(||{
+                        println!("current_vertex.connected_vertices {:?}", current_vertex.connected_vertices);
                         CenterlineError::InvalidData(
-                            "Could not find next vertex. All lines must form unconnected loops".to_string(),
-                        ),
+                            "Could not find next vertex. All lines must form connected loops".to_string(),
+                        )},
                     )?;
                 } else {
                     break;
@@ -556,7 +557,7 @@ pub fn divide_into_shapes<T: GenericVector3>(
                 loops += 1;
                 if loops > rvi.len() + 1 {
                     return Err(CenterlineError::InvalidData(
-                        "It seems like one (or more) of the line strings does not form an unconnected loop."
+                        "It seems like one (or more) of the line strings does not form a connected loop."
                             .to_string(),
                     ));
                 }
@@ -617,7 +618,7 @@ where
     let plane = if let Some(plane) = Plane::get_plane_relaxed(total_aabb, epsilon, max_ulps) {
         plane
     } else {
-        return Err(CenterlineError::InputNotPLane);
+        return Err(CenterlineError::InputNotPLane(format!("{:?}", total_aabb)));
     };
 
     println!(
@@ -880,14 +881,13 @@ where
         &mut self,
         cos_angle: T3::Scalar,
         discrete_limit: T3::Scalar,
-        ignored_regions: Option<&Vec<(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)>>,
+        ignored_regions: Option<&Vec<(Aabb2<T3::Vector2>, Vec<T3::Vector2>)>>,
     ) -> Result<(), CenterlineError> {
         self.angle_test(cos_angle)?;
         if let Some(ignored_regions) = ignored_regions {
             self.traverse_edges(discrete_limit, ignored_regions)?;
         } else {
-            let ignored_regions =
-                Vec::<(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)>::with_capacity(0);
+            let ignored_regions = Vec::<(Aabb2<T3::Vector2>, Vec<T3::Vector2>)>::with_capacity(0);
             self.traverse_edges(discrete_limit, &ignored_regions)?;
         }
         Ok(())
@@ -901,15 +901,14 @@ where
     pub fn calculate_centerline_mesh(
         &mut self,
         discrete_limit: T3::Scalar,
-        ignored_regions: Option<&Vec<(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)>>,
+        ignored_regions: Option<&Vec<(Aabb2<T3::Vector2>, Vec<T3::Vector2>)>>,
     ) -> Result<(), CenterlineError> {
         self.ignored_edges = self.rejected_edges.clone();
 
         if let Some(ignored_regions) = ignored_regions {
             self.traverse_cells(discrete_limit, ignored_regions)?;
         } else {
-            let ignored_regions =
-                Vec::<(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)>::with_capacity(0);
+            let ignored_regions = Vec::<(Aabb2<T3::Vector2>, Vec<T3::Vector2>)>::with_capacity(0);
             self.traverse_cells(discrete_limit, &ignored_regions)?;
         }
         Ok(())
@@ -1165,10 +1164,10 @@ where
     fn edges_are_inside_ignored_region(
         &self,
         edges: &Vob32,
-        ignored_regions: &[(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)],
+        ignored_regions: &[(Aabb2<T3::Vector2>, Vec<T3::Vector2>)],
     ) -> Result<bool, CenterlineError> {
         let is_inside_region = |edge: BV::EdgeIndex,
-                                region: &(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)|
+                                region: &(Aabb2<T3::Vector2>, Vec<T3::Vector2>)|
          -> Result<bool, CenterlineError> {
             let v0 = self.diagram.edge_get_vertex0(edge)?.unwrap();
             let v0 = self.diagram.vertex_get(v0).unwrap();
@@ -1201,7 +1200,7 @@ where
     fn traverse_edges(
         &mut self,
         maxdist: T3::Scalar,
-        ignored_regions: &[(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)],
+        ignored_regions: &[(Aabb2<T3::Vector2>, Vec<T3::Vector2>)],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
         let mut lines = self.lines.take().ok_or_else(|| {
@@ -1335,7 +1334,7 @@ where
     fn traverse_cells(
         &mut self,
         max_dist: T3::Scalar,
-        ignored_regions: &[(Aabb2<T3::Vector2>, LineString2<T3::Vector2>)],
+        ignored_regions: &[(Aabb2<T3::Vector2>, Vec<T3::Vector2>)],
     ) -> Result<(), CenterlineError> {
         // de-couple self and containers
         let mut lines = self.lines.take().ok_or_else(|| {
