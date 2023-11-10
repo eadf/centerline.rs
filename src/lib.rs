@@ -59,7 +59,7 @@ use ahash::AHashSet;
 use boostvoronoi as BV;
 use boostvoronoi::OutputType;
 use linestring::linestring_2d::{self, convex_hull, Aabb2, Line2, LineStringSet2};
-use linestring::linestring_3d::{self, Line3, LineString3, LineStringSet3, Plane};
+use linestring::linestring_3d::{self, Line3, LineStringSet3, Plane};
 use ordered_float::OrderedFloat;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::VecDeque;
@@ -525,7 +525,7 @@ pub fn divide_into_shapes<T: GenericVector3>(
             let mut loops = 0;
 
             let mut rvs = LineStringSet3::<T>::with_capacity(rvi.len());
-            let mut als = LineString3::<T>::with_capacity(rvi.len());
+            let mut als = Vec::<T>::with_capacity(rvi.len());
 
             let started_with: usize = rvi.iter().next().unwrap().1.id;
             let mut prev: usize;
@@ -562,13 +562,13 @@ pub fn divide_into_shapes<T: GenericVector3>(
                     ));
                 }
             }
-            if als.points().last() != als.points().first() {
+            if als.last() != als.first() {
                 println!(
                     "Linestring is not connected ! {:?} {:?}",
-                    als.points().first(),
-                    als.points().last()
+                    als.first(),
+                    als.last()
                 );
-                println!("Linestring is not connected ! {:?}", als.points());
+                println!("Linestring is not connected ! {:?}", als);
             }
             rvs.push(als);
             Ok(rvs)
@@ -799,7 +799,7 @@ where
     /// the individual two-point edges
     pub lines: Option<Vec<Line3<T>>>,
     /// concatenated connected edges
-    pub line_strings: Option<Vec<LineString3<T>>>,
+    pub line_strings: Option<Vec<Vec<T>>>,
 
     /// bit field defining edges rejected by EXTERNAL or INFINITE
     rejected_edges: Option<Vob32>,
@@ -820,7 +820,7 @@ where
             diagram: BV::SyncDiagram::default(),
             segments: Vec::<BV::Line<I>>::default(),
             lines: Some(Vec::<Line3<T3>>::new()),
-            line_strings: Some(Vec::<LineString3<T3>>::new()),
+            line_strings: Some(Vec::<Vec<T3>>::new()),
             rejected_edges: None,
             ignored_edges: None,
             #[cfg(feature = "console_debug")]
@@ -840,7 +840,7 @@ where
             diagram: BV::SyncDiagram::default(),
             segments,
             lines: Some(Vec::<Line3<T3>>::new()),
-            line_strings: Some(Vec::<LineString3<T3>>::new()),
+            line_strings: Some(Vec::<Vec<T3>>::new()),
             rejected_edges: None,
             ignored_edges: None,
             #[cfg(feature = "console_debug")]
@@ -1495,7 +1495,7 @@ where
         ignored_edges: &Vob32,
         used_edges: &mut Vob32,
         lines: &mut Vec<Line3<T3>>,
-        linestrings: &mut Vec<LineString3<T3>>,
+        linestrings: &mut Vec<Vec<T3>>,
         maxdist: T3::Scalar,
     ) -> Result<(), CenterlineError> {
         #[cfg(feature = "console_debug")]
@@ -1679,7 +1679,7 @@ where
         &self,
         edges: &[BV::EdgeIndex],
         lines: &mut Vec<Line3<T3>>,
-        linestrings: &mut Vec<LineString3<T3>>,
+        linestrings: &mut Vec<Vec<T3>>,
         maxdist: T3::Scalar,
     ) -> Result<(), CenterlineError> {
         #[cfg(feature = "console_debug")]
@@ -1709,7 +1709,7 @@ where
                 }
             }
             _ => {
-                let mut ls = LineString3::<T3>::default();
+                let mut ls = Vec::<T3>::default();
                 for edge_id in edges.iter() {
                     let edge = self.diagram.edge_get(*edge_id)?;
                     match self.convert_edge_to_shape(edge)? {
@@ -1721,7 +1721,7 @@ where
                         }
                         linestring_3d::Shape3d::ParabolicArc(a) => {
                             //println!("->got {:?}", a);
-                            ls.append(a.discretize_3d(maxdist));
+                            ls.append(&mut a.discretize_3d(maxdist));
                             //println!("<-got");
                         }
                         // should not happen

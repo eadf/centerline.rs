@@ -122,7 +122,7 @@ where
     // centerline.segments is the simplified version of 'raw_data', also input to boost voronoi
     centerline: Option<Centerline<I, T>>,
 
-    simplified_centerline: Option<Vec<LineString3<T>>>,
+    simplified_centerline: Option<Vec<Vec<T>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -475,7 +475,7 @@ where
                         //println!("an_arc start_point:{:?} end_point:{:?} cell_point:{:?} segment:{:?}", an_arc.start_point, an_arc.end_point, an_arc.cell_point, an_arc.segment);
                         //let lines = an_arc.discretise_2d(1000.0);
                         //println!("an_arc.len()={:?}", lines.points().len() );
-                        for a_line in a_linestring.as_lines_iter() {
+                        for a_line in a_linestring.window_iter() {
                             draw_fn(
                                 data_bm.affine.transform_ab_a([
                                     a_line.start.x(),
@@ -671,16 +671,16 @@ where
                         for s in shared_data_b.shapes.iter().flatten() {
                             for r in s.centerline.iter() {
                                 for ls in r.line_strings.iter().flatten() {
-                                    data_to_save.push(
-                                        ls.clone()
-                                            .apply(&|x| {
-                                                shared_data_b
-                                                    .configuration
-                                                    .inverse_transform
-                                                    .transform_point3(x)
-                                            })
-                                            .as_lines(),
-                                    );
+                                    data_to_save.push({
+                                        let mut lsc = ls.clone();
+                                        lsc.apply(&|x| {
+                                            shared_data_b
+                                                .configuration
+                                                .inverse_transform
+                                                .transform_point3(x)
+                                        });
+                                        lsc.window_iter().collect()
+                                    });
                                 }
                                 for ls in r.lines.iter().flatten() {
                                     data_to_save.push(vec![ls.apply(|x| {
@@ -881,7 +881,7 @@ where
         if let Some(simplified_centerline) = shape.simplified_centerline.take() {
             simplified_centerline
         } else {
-            Vec::<LineString3<T>>::new()
+            Vec::<Vec<T>>::new()
         };
     simplified_centerline.clear();
     if let Some(ref centerline) = shape.centerline {
@@ -1006,9 +1006,9 @@ where
     let mut raw_data: Vec<LineStringSet2<<T as GenericVector3>::Vector2>> = lines
         .par_iter()
         .map(|x| {
-            x.clone()
-                .apply(&|v| transform.transform_point3(v))
-                .copy_to_2d(linestring_3d::Plane::XY)
+            let mut xc = x.clone();
+            xc.apply(&|v| transform.transform_point3(v));
+            xc.copy_to_2d(linestring_3d::Plane::XY)
         })
         .collect();
     {

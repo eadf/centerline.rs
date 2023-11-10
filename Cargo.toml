@@ -1,6 +1,6 @@
 [package]
 name = "centerline"
-version = "0.8.0"
+version = "0.9.0"
 authors = ["eadf"]
 edition = "2021"
 description = "Simple library for finding centerlines of 2D closed geometry"
@@ -23,13 +23,14 @@ cgmath = ["vector-traits/cgmath"] # this is only needed for some tests
 ahash = "0.8.6"
 vob = "3.0.3"
 boostvoronoi = { version = "0.11.0" }
-vector-traits = { version = "0.2.0", features = ["glam"] }
-linestring = "0.10.1"
+vector-traits = { version = "0.3.0", features = ["glam"] }
+linestring = "0.11.0"
 thiserror = "1.0.50"
 rayon = "1.8.0"
 bitflags = "2.4.1"
 ordered-float = "4.1.1"
 obj-rs = { version = "0.7.1", optional = true }
+smallvec = "1.11.2"
 
 [[example]]
 name = "fltk_gui"
@@ -44,7 +45,7 @@ path = "example/cli.rs"
 fltk = "1.4.15"
 itertools = "0.11.0"
 criterion = "0.5.1"
-vector-traits = { version = "0.2.0", features = ["glam", "cgmath"] }
+vector-traits = { version = "0.3.0", features = ["glam", "cgmath"] }
 
 [[bench]]
 name = "bench"

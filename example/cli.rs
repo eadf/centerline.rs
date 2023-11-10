@@ -86,7 +86,7 @@ fn main() -> Result<(), CenterlineError> {
     println!("linestrings:");
     for ls in centerline.line_strings.iter().flatten() {
         print!("linestring:");
-        for point in ls.points().iter() {
+        for point in ls.iter() {
             print!("[{},{},{}],", point.x, point.y, point.z);
         }
         println!();
