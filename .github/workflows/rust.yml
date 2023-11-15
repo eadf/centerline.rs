@@ -21,9 +21,9 @@ jobs:
       - name: install stable
         run: rustup toolchain install stable --component rustfmt,clippy --allow-downgrade
       - name: Build
-        run: cargo +stable build --verbose
+        run: cargo +stable build --verbose  --all-features
       - name: Run clippy
-        run: cargo +stable clippy --verbose
+        run: cargo +stable clippy --verbose --all-features
       - name: Run tests
-        run: cargo +stable test --verbose
+        run: cargo +stable test --verbose --all-features
 
