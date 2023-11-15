@@ -20,11 +20,15 @@ glam = ["vector-traits/glam"] # this is only needed for the gui, tests and bench
 cgmath = ["vector-traits/cgmath"] # this is only needed for some tests
 
 [dependencies]
+#vector-traits = { version = "0.3.0", features = ["glam"] }
+#vector-traits = {path = "../vector-traits"}
+vector-traits = {git = "https://github.com/eadf/vector-traits.git"}
+#linestring = "0.11.0"
+#linestring = {path="../linestring.rs"}
+linestring = {git = "https://github.com/eadf/linestring.rs.git"}
+boostvoronoi = { version = "0.11.0" }
 ahash = "0.8.6"
 vob = "3.0.3"
-boostvoronoi = { version = "0.11.0" }
-vector-traits = { version = "0.3.0", features = ["glam"] }
-linestring = "0.11.0"
 thiserror = "1.0.50"
 rayon = "1.8.0"
 bitflags = "2.4.1"
@@ -42,10 +46,13 @@ name = "cli"
 path = "example/cli.rs"
 
 [dev-dependencies]
+#vector-traits = { version = "0.3.0", features = ["glam", "cgmath"] }
+#vector-traits = { path = "../vector-traits", features = ["glam", "cgmath"] }
+vector-traits = {git = "https://github.com/eadf/vector-traits.git", features = ["glam", "cgmath"]}
+
 fltk = "1.4.15"
-itertools = "0.11.0"
+itertools = "0.12.0"
 criterion = "0.5.1"
-vector-traits = { version = "0.3.0", features = ["glam", "cgmath"] }
 
 [[bench]]
 name = "bench"

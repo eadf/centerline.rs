@@ -67,7 +67,7 @@ use std::fmt::Debug;
 use std::line;
 use thiserror::Error;
 use vector_traits::approx::{ulps_eq, AbsDiffEq, UlpsEq};
-use vector_traits::glam::{self, DVec3, Vec3};
+use vector_traits::glam::{self, DVec3, Vec3, Vec3A};
 use vector_traits::num_traits::AsPrimitive;
 use vector_traits::num_traits::{self, real::Real};
 use vector_traits::{GenericScalar, GenericVector2, GenericVector3, HasXY};
@@ -166,6 +166,17 @@ pub trait Matrix4<T: GenericVector3>: Sized + Sync + Send + Clone {
 
 pub trait HasMatrix4: GenericVector3 {
     type Matrix4Type: Matrix4<Self>;
+    /// Creates a 4x4 transformation matrix for scaling, centering, and transforming to a specified 2D plane.
+    ///
+    /// # Arguments
+    ///
+    /// * `scale` - Scaling factor.
+    /// * `center` - Center point for translation.
+    /// * `plane` - Target 2D plane (XY, XZ, or YZ).
+    ///
+    /// # Returns
+    ///
+    /// The resulting 4x4 transformation matrix.
     fn matrix4_from_scale_center_plane(
         scale: Self::Scalar,
         center: Self,
@@ -184,6 +195,36 @@ impl HasMatrix4 for Vec3 {
         let scale_transform = glam::Mat4::from_scale(Vec3::new(scale, scale, scale));
 
         let center = scale_transform.transform_point3(center);
+        let center_transform =
+            glam::Mat4::from_translation(Vec3::new(-center.x, -center.y, -center.z));
+
+        let plane_transform = match plane {
+            Plane::XY => glam::Mat4::IDENTITY,
+            Plane::XZ => {
+                glam::Mat4::from_cols(glam::Vec4::X, glam::Vec4::Z, glam::Vec4::Y, glam::Vec4::W)
+            }
+            Plane::YZ => {
+                glam::Mat4::from_cols(glam::Vec4::Z, glam::Vec4::Y, glam::Vec4::X, glam::Vec4::W)
+            }
+        };
+        plane_transform * center_transform * scale_transform
+    }
+
+    fn identity() -> Self::Matrix4Type {
+        glam::Mat4::IDENTITY
+    }
+}
+
+impl HasMatrix4 for Vec3A {
+    type Matrix4Type = glam::Mat4;
+    fn matrix4_from_scale_center_plane(
+        scale: <Vec3A as HasXY>::Scalar,
+        center: Vec3A,
+        plane: Plane,
+    ) -> Self::Matrix4Type {
+        let scale_transform = glam::Mat4::from_scale(Vec3::new(scale, scale, scale));
+
+        let center = scale_transform.transform_point3(center.into());
         let center_transform =
             glam::Mat4::from_translation(Vec3::new(-center.x, -center.y, -center.z));
 
@@ -243,6 +284,17 @@ impl HasMatrix4 for DVec3 {
 impl Matrix4<Vec3> for glam::Mat4 {
     fn transform_point3(&self, point: Vec3) -> Vec3 {
         glam::Mat4::transform_point3(self, point)
+    }
+
+    // todo: actually make this "safe" by checking the determinant
+    fn safe_inverse(&self) -> Option<<Vec3 as HasMatrix4>::Matrix4Type> {
+        Some(glam::Mat4::inverse(self))
+    }
+}
+
+impl Matrix4<Vec3A> for glam::Mat4 {
+    fn transform_point3(&self, point: Vec3A) -> Vec3A {
+        glam::Mat4::transform_point3a(self, point)
     }
 
     // todo: actually make this "safe" by checking the determinant

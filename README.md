@@ -54,6 +54,13 @@ The minimum supported version of Rust for `centerline` is `1.66`.
 - [ ] Sometimes a shape registers as 'outside' it's convex hull 
 - [ ] Add opengl to fltk_gui so that the 3D aspect of the center-line can be visualized. 
 
+## Contributing
+
+We welcome contributions from the community.
+Feel free to submit pull requests or report issues on our GitHub repository.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you,
+as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
 ## License
 
 Licensed under either of
