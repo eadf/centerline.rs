@@ -12,8 +12,6 @@
     unused_imports,
     unused_variables
 )]
-#![cfg_attr(feature = "hash_drain_filter", feature(hash_drain_filter))]
-#![cfg_attr(feature = "map_first_last", feature(map_first_last))]
 
 use boostvoronoi as BV;
 use cgmath::{InnerSpace, MetricSpace, SquareMatrix, Transform};
@@ -247,7 +245,7 @@ pub fn remove_internal_edges(
         // inefficient version of drain_filter for +stable
         let kept_edges = all_edges
             .into_iter()
-            .filter(|x| !internal_edges.contains(&x))
+            .filter(|x| !internal_edges.contains(x))
             .collect();
         all_edges = kept_edges;
     }
@@ -445,7 +443,7 @@ pub fn divide_into_shapes<T: cgmath::BaseFloat + Sync + Send>(
 /// 'desired_voronoi_dimension' is the maximum length of the voronoi input data aabb
 /// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
 /// maintain numerical precision
-pub fn get_transform<F: cgmath::BaseFloat + Sync>(
+pub fn get_transform<F: cgmath::BaseFloat + Sync + ordered_float::FloatCore>(
     total_aabb: linestring_3d::Aabb3<F>,
     desired_voronoi_dimension: F,
 ) -> Result<
@@ -470,7 +468,7 @@ pub fn get_transform<F: cgmath::BaseFloat + Sync>(
 /// 'desired_voronoi_dimension' is the maximum length of the voronoi input data aabb
 /// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
 /// maintain numerical precision
-pub fn get_transform_relaxed<F: cgmath::BaseFloat + Sync>(
+pub fn get_transform_relaxed<F: cgmath::BaseFloat + Sync + ordered_float::FloatCore>(
     total_aabb: linestring_3d::Aabb3<F>,
     desired_voronoi_dimension: F,
     epsilon: F,
@@ -684,9 +682,9 @@ pub struct Centerline<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> {
     pub debug_edges: Option<ahash::AHashMap<usize, [F; 4]>>,
 }
 
-impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
+impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Default for Centerline<I, F> {
     /// Creates a Centerline container with a set of segments
-    pub fn default() -> Self {
+    fn default() -> Self {
         Self {
             diagram: BV::SyncDiagram::default(),
             segments: Vec::<BV::Line<I>>::default(),
@@ -698,7 +696,8 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
             debug_edges: None,
         }
     }
-
+}
+impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
     /// Creates a Centerline container with a set of segments
     pub fn with_segments(segments: Vec<BV::Line<I>>) -> Self {
         Self {
@@ -1483,7 +1482,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                                 next_edge = self.diagram.edge_get(e)?.next()?;
                             } else {
                                 // terminating the line string, pushing candidates
-                                let _ = self.convert_edges_to_lines(
+                                self.convert_edges_to_lines(
                                     &current_edge_set,
                                     lines,
                                     linestrings,
@@ -1515,7 +1514,7 @@ impl<I: BV::InputType, F: cgmath::BaseFloat + BV::OutputType> Centerline<I, F> {
                         }
                         _ => {
                             // to many or too few intersections found, end this linestring and push the new candidates to the queue
-                            let _ = self.convert_edges_to_lines(
+                            self.convert_edges_to_lines(
                                 &current_edge_set,
                                 lines,
                                 linestrings,

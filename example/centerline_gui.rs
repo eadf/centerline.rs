@@ -105,6 +105,7 @@ pub enum GuiMessage {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     pub struct DrawFilterFlag: u32 {
         /// Edges considered to be outside all closed input geometry
         const THREAD_GROUP_HULL     = 0b000000000000001;
@@ -558,7 +559,7 @@ fn main() -> Result<(), CenterlineError> {
                 GuiMessage::MenuChoiceLoad => {
                     let mut chooser = dialog::NativeFileChooser::new(FileDialogType::BrowseDir);
 
-                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_directory(&std::path::PathBuf::from("examples"));
                     let _ = chooser.set_title("select your input data");
                     chooser.set_filter("*.obj");
                     chooser.show();
@@ -579,7 +580,7 @@ fn main() -> Result<(), CenterlineError> {
                     let mut chooser =
                         dialog::NativeFileChooser::new(FileDialogType::BrowseSaveFile);
 
-                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_directory(&std::path::PathBuf::from("examples"));
                     let _ = chooser.set_title("select file to save outline to");
                     chooser.set_filter("*.obj");
                     chooser.show();
@@ -622,7 +623,7 @@ fn main() -> Result<(), CenterlineError> {
                     let mut chooser =
                         dialog::NativeFileChooser::new(FileDialogType::BrowseSaveFile);
 
-                    let _ = chooser.set_directory(std::path::Path::new("examples"));
+                    let _ = chooser.set_directory(&std::path::PathBuf::from("examples"));
                     let _ = chooser.set_title("select file to save outline to");
                     chooser.set_filter("*.obj");
                     chooser.show();

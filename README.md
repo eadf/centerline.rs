@@ -1,7 +1,7 @@
 [![crates.io](https://img.shields.io/crates/v/centerline.svg)](https://crates.io/crates/centerline)
 [![Documentation](https://docs.rs/centerline/badge.svg)](https://docs.rs/centerline)
 [![Workflow](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)](https://github.com/eadf/centerline.rs/workflows/Rust/badge.svg)
-[![dependency status](https://deps.rs/crate/centerline/0.7.0/status.svg)](https://deps.rs/crate/centerline/0.7.0)
+[![dependency status](https://deps.rs/crate/centerline/0.7.1/status.svg)](https://deps.rs/crate/centerline/0.7.1)
 ![license](https://img.shields.io/crates/l/centerline)
 
 This simple library tries to find centerlines, aka the median-axis, of closed 2D geometries.
@@ -46,8 +46,6 @@ Also make sure there are no intersecting outer edges.
 
 ## Rust requirement
 The crate is only tested on 1.56 and above (2021 edition).
-
-Will automatically use `#![feature(hash_drain_filter)]` and `#![feature(map_first_last)]` if run on `rust +nightly`. 
 
 ## Todo
 
