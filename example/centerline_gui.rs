@@ -962,6 +962,7 @@ where
     Ok(())
 }
 
+#[cfg(feature = "obj-rs")]
 /// Add data to the input lines.
 fn add_data_from_file<I: InputType + Send, T: GenericVector3>(
     shared_data: Rc<RefCell<SharedData<I, T>>>,

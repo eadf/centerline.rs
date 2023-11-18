@@ -222,11 +222,11 @@ impl HasMatrix4 for Vec3A {
         center: Vec3A,
         plane: Plane,
     ) -> Self::Matrix4Type {
-        let scale_transform = glam::Mat4::from_scale(Vec3::new(scale, scale, scale));
+        let scale_transform = glam::Mat4::from_scale(Vec3::splat(scale));
 
-        let center = scale_transform.transform_point3(center.into());
+        let center = scale_transform.transform_point3a(center);
         let center_transform =
-            glam::Mat4::from_translation(Vec3::new(-center.x, -center.y, -center.z));
+            glam::Mat4::from_translation((-center).into());
 
         let plane_transform = match plane {
             Plane::XY => glam::Mat4::IDENTITY,
@@ -595,7 +595,7 @@ pub fn divide_into_shapes<T: GenericVector3>(
                     next = *current_vertex.connected_vertices.iter().find(|x| **x != prev).ok_or_else(||{
                         println!("current_vertex.connected_vertices {:?}", current_vertex.connected_vertices);
                         CenterlineError::InvalidData(
-                            "Could not find next vertex. All lines must form connected loops".to_string(),
+                            "Could not find next vertex. All lines must form connected loops (loops connected to other loops are not supported,yet)".to_string(),
                         )},
                     )?;
                 } else {
@@ -609,7 +609,7 @@ pub fn divide_into_shapes<T: GenericVector3>(
                 loops += 1;
                 if loops > rvi.len() + 1 {
                     return Err(CenterlineError::InvalidData(
-                        "It seems like one (or more) of the line strings does not form a connected loop."
+                        "It seems like one (or more) of the line strings does not form a connected loop.(loops connected to other loops are not supported,yet)"
                             .to_string(),
                     ));
                 }
