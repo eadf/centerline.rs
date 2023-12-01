@@ -58,8 +58,10 @@ limitations under the License.
 use ahash::AHashSet;
 use boostvoronoi as BV;
 use boostvoronoi::OutputType;
-use linestring::linestring_2d::{self, convex_hull, Aabb2, Line2, LineStringSet2};
-use linestring::linestring_3d::{self, Line3, LineStringSet3, Plane};
+use linestring::linestring_2d::{self, convex_hull, Aabb2, Line2};
+use linestring::linestring_3d::{self, Aabb3, Line3, Plane};
+use linestring::prelude::{LineString2, LineString3};
+use linestring::LinestringError;
 use ordered_float::OrderedFloat;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::VecDeque;
@@ -102,7 +104,7 @@ pub enum CenterlineError {
     IoError(#[from] std::io::Error),
 
     #[error(transparent)]
-    LinestringError(#[from] linestring::LinestringError),
+    LinestringError(#[from] LinestringError),
 }
 
 bitflags! {
@@ -225,8 +227,7 @@ impl HasMatrix4 for Vec3A {
         let scale_transform = glam::Mat4::from_scale(Vec3::splat(scale));
 
         let center = scale_transform.transform_point3a(center);
-        let center_transform =
-            glam::Mat4::from_translation((-center).into());
+        let center_transform = glam::Mat4::from_translation((-center).into());
 
         let plane_transform = match plane {
             Plane::XY => glam::Mat4::IDENTITY,
@@ -637,7 +638,7 @@ pub fn divide_into_shapes<T: GenericVector3>(
 /// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
 /// maintain numerical precision
 pub fn get_transform<T: GenericVector3 + HasMatrix4>(
-    total_aabb: linestring_3d::Aabb3<T>,
+    total_aabb: Aabb3<T>,
     desired_voronoi_dimension: T::Scalar,
 ) -> Result<(Plane, T::Matrix4Type, Aabb2<T::Vector2>), CenterlineError>
 where
@@ -659,7 +660,7 @@ where
 /// boost_voronoi uses integers as input so float vertices have to be scaled up substantially to
 /// maintain numerical precision
 pub fn get_transform_relaxed<T: GenericVector3 + HasMatrix4>(
-    total_aabb: linestring_3d::Aabb3<T>,
+    total_aabb: Aabb3<T>,
     desired_voronoi_dimension: T::Scalar,
     epsilon: T::Scalar,
     max_ulps: u32,
@@ -799,7 +800,9 @@ where
         for i in 0..raw_data.len() {
             for j in i + 1..raw_data.len() {
                 //println!("testing #{} vs #{}", i, j);
-                if raw_data[i].get_aabb().contains_aabb(raw_data[j].get_aabb())
+                if raw_data[i]
+                    .get_aabb()
+                    .contains_aabb_inclusive(&raw_data[j].get_aabb())
                     && convex_hull::contains_convex_hull(
                         raw_data[i].get_convex_hull().as_ref().unwrap(),
                         raw_data[j].get_convex_hull().as_ref().unwrap(),
@@ -813,7 +816,9 @@ where
                     line_i.take_from_internal(&mut stolen_line_j)?;
                     let _ = raw_data.remove(j);
                     continue 'outer_loop;
-                } else if raw_data[j].get_aabb().contains_aabb(raw_data[i].get_aabb())
+                } else if raw_data[j]
+                    .get_aabb()
+                    .contains_aabb_inclusive(&raw_data[i].get_aabb())
                     && convex_hull::contains_convex_hull(
                         raw_data[j].get_convex_hull().as_ref().unwrap(),
                         raw_data[i].get_convex_hull().as_ref().unwrap(),
@@ -1942,5 +1947,274 @@ where
             println!("Converted {:?} to {:?}", edge.id().0, line);
             Ok(linestring_3d::Shape3d::Line(line))
         }
+    }
+}
+
+/// A set of 2d LineString, an aabb + convex_hull.
+/// It also contains a list of aabb & convex_hulls of shapes this set has gobbled up.
+/// This can be useful for separating out inner regions of the shape.
+///
+/// This struct is intended to contain related shapes. E.g. outlines of letters with holes
+#[derive(Clone)]
+pub struct LineStringSet2<T: GenericVector2> {
+    set: Vec<Vec<T>>,
+    aabb: Aabb2<T>,
+    convex_hull: Option<Vec<T>>,
+    pub internals: Option<Vec<(Aabb2<T>, Vec<T>)>>,
+}
+
+impl<T: GenericVector2> Default for LineStringSet2<T> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            set: Vec::<_>::default(),
+            aabb: Aabb2::default(),
+            convex_hull: None,
+            internals: None,
+            //_pd:PhantomData,
+        }
+    }
+}
+
+impl<T: GenericVector2> LineStringSet2<T> {
+    /// steal the content of 'other' leaving it empty
+    pub fn steal_from(other: &mut LineStringSet2<T>) -> Self {
+        //println!("stealing from other.aabb:{:?}", other.aabb);
+        let mut set = Vec::<Vec<T>>::new();
+        set.append(&mut other.set);
+        Self {
+            set,
+            aabb: other.aabb,
+            convex_hull: other.convex_hull.take(),
+            internals: other.internals.take(),
+            //_pd:PhantomData,
+        }
+    }
+
+    pub fn set(&self) -> &Vec<Vec<T>> {
+        &self.set
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            set: Vec::<Vec<T>>::with_capacity(capacity),
+            aabb: Aabb2::default(),
+            convex_hull: None,
+            internals: None,
+            //_pd:PhantomData,
+        }
+    }
+
+    pub fn get_internals(&self) -> Option<&Vec<(Aabb2<T>, Vec<T>)>> {
+        self.internals.as_ref()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    pub fn push(&mut self, ls: Vec<T>) {
+        if !ls.is_empty() {
+            self.set.push(ls);
+
+            for ls in self.set.last().unwrap().iter() {
+                self.aabb.update_with_point(*ls);
+            }
+        }
+    }
+
+    /// returns the combined convex hull of all the shapes in self.set
+    pub fn get_convex_hull(&self) -> &Option<Vec<T>> {
+        &self.convex_hull
+    }
+
+    /// calculates the combined convex hull of all the shapes in self.set
+    pub fn calculate_convex_hull(&mut self) -> Result<&Vec<T>, LinestringError> {
+        // todo: this is sus
+        let tmp: Vec<_> = self.set.iter().flatten().cloned().collect();
+        self.convex_hull = Some(convex_hull::graham_scan(&tmp)?);
+        Ok(self.convex_hull.as_ref().unwrap())
+    }
+
+    /// Returns the axis aligned bounding box of this set.
+    pub fn get_aabb(&self) -> Aabb2<T> {
+        self.aabb
+    }
+
+    /*/// Transform each individual component of this set using the transform matrix.
+    /// Return the result in a new object.
+    pub fn transform(&self, matrix3x3: &M) -> Self {
+        let internals = self.internals.as_ref().map(|internals| {
+            internals
+                .iter()
+                .map(|(aabb, line)| (transform_aabb2(matrix3x3, aabb),transform_linestring2( matrix3x3,line)))
+                .collect()
+        });
+
+        let convex_hull = self
+            .convex_hull
+            .as_ref()
+            .map(|convex_hull| transform_linestring2(matrix3x3, convex_hull));
+
+        Self {
+            aabb: transform_aabb2(matrix3x3, &self.aabb),
+            set: self.set.iter().map(|x| transform_linestring2(matrix3x3, x)).collect(),
+            convex_hull,
+            internals,
+            _pd:PhantomData,
+        }
+    }*/
+
+    /// Copy this linestringset2 into a linestringset3, populating the axes defined by 'plane'
+    /// An axis will always try to keep it's position (e.g. y goes to y if possible).
+    /// That way the operation is reversible (with regards to axis positions).
+    /// The empty axis will be set to zero.
+    pub fn copy_to_3d(&self, plane: Plane) -> LineStringSet3<T::Vector3> {
+        let mut rv = LineStringSet3::<T::Vector3>::with_capacity(self.set.len());
+        for ls in self.set.iter() {
+            rv.push(ls.copy_to_3d(plane));
+        }
+        rv
+    }
+
+    /// drains the 'other' container of all shapes and put them into 'self'
+    pub fn take_from(&mut self, mut other: Self) {
+        self.aabb.update_aabb(other.aabb);
+        self.set.append(&mut other.set);
+    }
+
+    /// drains the 'other' container of all shapes and put them into 'self'
+    /// The other container must be entirely 'inside' the convex hull of 'self'
+    /// The 'other' container must also contain valid 'internals' and 'convex_hull' fields
+    pub fn take_from_internal(&mut self, other: &mut Self) -> Result<(), LinestringError> {
+        // sanity check
+        if other.convex_hull.is_none() {
+            return Err(LinestringError::InvalidData(
+                "'other' did not contain a valid 'convex_hull' field".to_string(),
+            ));
+        }
+        if self.aabb.low().is_none() {
+            //println!("self.aabb {:?}", self.aabb);
+            //println!("other.aabb {:?}", other.aabb);
+            return Err(LinestringError::InvalidData(
+                "'self' did not contain a valid 'aabb' field".to_string(),
+            ));
+        }
+        if other.aabb.low().is_none() {
+            return Err(LinestringError::InvalidData(
+                "'other' did not contain a valid 'aabb' field".to_string(),
+            ));
+        }
+        if !self.aabb.contains_aabb_inclusive(&other.aabb) {
+            //println!("self.aabb {:?}", self.aabb);
+            //println!("other.aabb {:?}", other.aabb);
+            return Err(LinestringError::InvalidData(
+                "The 'other.aabb' is not contained within 'self.aabb'".to_string(),
+            ));
+        }
+        if self.internals.is_none() {
+            self.internals = Some(Vec::<(Aabb2<T>, Vec<T>)>::new())
+        }
+
+        self.set.append(&mut other.set);
+
+        if let Some(ref mut other_internals) = other.internals {
+            // self.internals.unwrap is safe now
+            self.internals.as_mut().unwrap().append(other_internals);
+        }
+
+        self.internals
+            .as_mut()
+            .unwrap()
+            .push((other.aabb, other.convex_hull.take().unwrap()));
+        Ok(())
+    }
+
+    /// Apply an operation over each coordinate in the contained objects.
+    /// Useful when you want to round the value of each contained coordinate.
+    pub fn apply<F: Fn(T) -> T>(&mut self, f: &F) {
+        for s in self.set.iter_mut() {
+            s.apply(f);
+        }
+        self.aabb.apply(f);
+        if let Some(ref mut convex_hull) = self.convex_hull {
+            convex_hull.apply(f);
+        }
+        if let Some(ref mut internals) = self.internals {
+            for i in internals.iter_mut() {
+                i.0.apply(f);
+                i.1.apply(f);
+            }
+        }
+    }
+}
+
+/// A set of line-strings + an aabb
+/// Intended to contain related 3d shapes. E.g. outlines of letters with holes
+#[derive(PartialEq, Eq, Clone, Hash)]
+pub struct LineStringSet3<T: GenericVector3> {
+    pub set: Vec<Vec<T>>,
+    pub aabb: Aabb3<T>,
+}
+
+impl<T: GenericVector3> Default for LineStringSet3<T> {
+    fn default() -> Self {
+        Self {
+            set: Vec::<Vec<T>>::default(),
+            aabb: Aabb3::default(),
+        }
+    }
+}
+
+impl<T: GenericVector3> LineStringSet3<T> {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            set: Vec::<Vec<T>>::with_capacity(capacity),
+            aabb: Aabb3::<T>::default(),
+        }
+    }
+
+    pub fn set(&self) -> &Vec<Vec<T>> {
+        &self.set
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    pub fn push(&mut self, ls: Vec<T>) {
+        if !ls.is_empty() {
+            self.set.push(ls);
+
+            for ls in self.set.last().unwrap().iter() {
+                self.aabb.update_with_point(*ls);
+            }
+        }
+    }
+
+    pub fn get_aabb(&self) -> Aabb3<T> {
+        self.aabb
+    }
+
+    pub fn apply<F: Fn(T) -> T>(&mut self, f: &F) {
+        self.set.iter_mut().for_each(|x| x.apply(f));
+        self.aabb.apply(f);
+    }
+
+    /// Copy this linestringset3 into a linestringset2, populating the axes defined by 'plane'
+    /// An axis will always try to keep it's position (e.g. y goes to y if possible).
+    /// That way the operation is reversible (with regards to axis positions).
+    pub fn copy_to_2d(&self, plane: Plane) -> LineStringSet2<T::Vector2> {
+        let mut rv = LineStringSet2::with_capacity(self.set.len());
+        for ls in self.set.iter() {
+            rv.push(ls.copy_to_2d(plane));
+        }
+        rv
+    }
+
+    /// drains the 'other' container of all shapes and put them into 'self'
+    pub fn take_from(&mut self, other: &mut Self) {
+        self.aabb.update_aabb(other.aabb);
+        self.set.append(&mut other.set);
     }
 }

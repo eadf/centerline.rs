@@ -41,15 +41,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-use centerline::CenterlineError;
 use centerline::Matrix4;
 use centerline::{Centerline, HasMatrix4};
+use centerline::{CenterlineError, LineStringSet2};
 
 use fltk::app::redraw;
 use fltk::enums::*;
 use fltk::group::Pack;
 use fltk::valuator::HorNiceSlider;
-use fltk::{app, dialog, draw, draw::*, frame::*, menu, window};
+use fltk::{app, dialog, draw, frame::*, menu, window};
 
 use boostvoronoi::{InputType, OutputType};
 use fltk::app::MouseWheel;
@@ -59,7 +59,7 @@ use fltk::menu::MenuButton;
 use fltk::prelude::{GroupExt, MenuExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
 #[allow(unused_imports)]
 use itertools::Itertools;
-use linestring::linestring_2d::{Aabb2, Line2, LineString2, LineStringSet2, SimpleAffine};
+use linestring::linestring_2d::{Aabb2, Line2, LineString2, SimpleAffine};
 use linestring::linestring_3d;
 use linestring::linestring_3d::LineString3;
 use rayon::prelude::*;
@@ -359,9 +359,9 @@ where
 
         let mut data_bm: RefMut<_> = shared_data_c.borrow_mut();
 
-        set_draw_color(Color::White);
-        draw_rectf(5, 5, WF, HF);
-        set_line_style(LineStyle::Solid, 1);
+        draw::set_draw_color(Color::White);
+        draw::draw_rectf(5, 5, WF, HF);
+        draw::set_line_style(draw::LineStyle::Solid, 1);
 
         let opt_shapes = data_bm.shapes.take();
         if let Some(vec_shapes) = opt_shapes {
@@ -372,7 +372,7 @@ where
             for shape in vec_shapes.iter() {
                 if let Some(ref centerline) = shape.centerline {
                     // Draw the segments of this shape
-                    draw::set_line_style(LineStyle::Solid, 2);
+                    draw::set_line_style(draw::LineStyle::Solid, 2);
                     draw::set_draw_color(Color::Red);
                     for a_line in centerline.segments.iter() {
                         draw_fn(
@@ -391,7 +391,7 @@ where
                         .draw_flag
                         .contains(DrawFilterFlag::THREAD_GROUP_AABB)
                     {
-                        draw::set_line_style(LineStyle::Solid, 1);
+                        draw::set_line_style(draw::LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark1);
                         let aabb: Vec<<T as GenericVector3>::Vector2> =
                             shape.raw_data.get_aabb().clone().into();
@@ -413,7 +413,7 @@ where
                         .draw_flag
                         .contains(DrawFilterFlag::THREAD_GROUP_HULL)
                     {
-                        draw::set_line_style(LineStyle::Solid, 1);
+                        draw::set_line_style(draw::LineStyle::Solid, 1);
                         draw::set_draw_color(Color::Dark2);
                         if let Some(ref hull) = shape.raw_data.get_convex_hull() {
                             for a_line in hull.window_iter() {
@@ -453,7 +453,7 @@ where
                         }
                     }
 
-                    draw::set_line_style(LineStyle::Solid, 1);
+                    draw::set_line_style(draw::LineStyle::Solid, 1);
                     draw::set_draw_color(Color::Black);
                     for a_line in centerline.lines.iter().flatten() {
                         draw_fn(
@@ -650,7 +650,7 @@ where
                         if let Err(err) = linestring::linestring_3d::save_to_obj_file(
                             filename.to_str().unwrap(),
                             "outline",
-                            data_to_save,
+                            &data_to_save,
                         ) {
                             println!("Failed to write file: {:?}", err);
                         }
@@ -695,7 +695,7 @@ where
                         if let Err(err) = linestring::linestring_3d::save_to_obj_file(
                             filename.to_str().unwrap(),
                             "centerline",
-                            data_to_save,
+                            &data_to_save,
                         ) {
                             println!("Failed to write file: {:?}", err);
                         }

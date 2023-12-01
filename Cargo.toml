@@ -21,7 +21,9 @@ cgmath = ["vector-traits/cgmath"] # this is only needed for some tests
 
 [dependencies]
 vector-traits = { version = "0.3.2", features = ["glam"] }
-linestring = "0.12.0"
+#linestring = "0.12.0"
+#linestring = { path="../linestring.rs"}
+linestring = {git = "https://github.com/eadf/linestring.rs.git"}
 boostvoronoi = { version = "0.11.0" }
 ahash = "0.8.6"
 vob = "3.0.3"
