@@ -2151,7 +2151,7 @@ impl<T: GenericVector2> LineStringSet2<T> {
 
 /// A set of line-strings + an aabb
 /// Intended to contain related 3d shapes. E.g. outlines of letters with holes
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Clone)]
 pub struct LineStringSet3<T: GenericVector3> {
     pub set: Vec<Vec<T>>,
     pub aabb: Aabb3<T>,
