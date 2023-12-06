@@ -985,7 +985,7 @@ where
     let lines = centerline::divide_into_shapes(lines.0, lines.1)?;
     let mut total_aabb = linestring_3d::Aabb3::<T>::default();
     for l in lines.iter() {
-        total_aabb.update_aabb(l.get_aabb());
+        total_aabb.update_with_aabb(l.get_aabb());
     }
     #[cfg(feature = "console_debug")]
     println!("total aabb b4:{:?}", total_aabb);

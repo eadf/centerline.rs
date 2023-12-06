@@ -59,7 +59,7 @@ use ahash::AHashSet;
 use boostvoronoi as BV;
 use boostvoronoi::OutputType;
 use linestring::linestring_2d::{self, convex_hull, Aabb2, Line2};
-use linestring::linestring_3d::{self, Aabb3, Line3, Plane};
+use linestring::linestring_3d::{Aabb3, Line3, Plane};
 use linestring::prelude::{LineString2, LineString3};
 use linestring::LinestringError;
 use ordered_float::OrderedFloat;
@@ -1753,11 +1753,11 @@ where
                 let edge_id = edges.first().unwrap();
                 let edge = self.diagram.edge_get(*edge_id)?;
                 match self.convert_edge_to_shape(edge) {
-                    Ok(linestring_3d::Shape3d::Line(l)) => lines.push(l),
-                    Ok(linestring_3d::Shape3d::ParabolicArc(a)) => {
+                    Ok(Shape3d::Line(l)) => lines.push(l),
+                    Ok(Shape3d::ParabolicArc(a)) => {
                         linestrings.push(a.discretize_3d(maxdist));
                     }
-                    Ok(linestring_3d::Shape3d::Linestring(_s)) => {
+                    Ok(Shape3d::Linestring(_s)) => {
                         panic!();
                     }
                     Err(_) => {
@@ -1770,19 +1770,19 @@ where
                 for edge_id in edges.iter() {
                     let edge = self.diagram.edge_get(*edge_id)?;
                     match self.convert_edge_to_shape(edge)? {
-                        linestring_3d::Shape3d::Line(l) => {
+                        Shape3d::Line(l) => {
                             //println!("->got {:?}", l);
                             ls.push(l.start);
                             ls.push(l.end);
                             //println!("<-got");
                         }
-                        linestring_3d::Shape3d::ParabolicArc(a) => {
+                        Shape3d::ParabolicArc(a) => {
                             //println!("->got {:?}", a);
                             ls.append(&mut a.discretize_3d(maxdist));
                             //println!("<-got");
                         }
                         // should not happen
-                        linestring_3d::Shape3d::Linestring(_s) => {
+                        Shape3d::Linestring(_s) => {
                             return Err(CenterlineError::InternalError(format!(
                                 "convert_edges_to_lines() got an unexpected linestring. {}:{}",
                                 file!(),
@@ -1798,10 +1798,7 @@ where
         Ok(())
     }
 
-    fn convert_edge_to_shape(
-        &self,
-        edge: &BV::Edge,
-    ) -> Result<linestring_3d::Shape3d<T3>, CenterlineError> {
+    fn convert_edge_to_shape(&self, edge: &BV::Edge) -> Result<Shape3d<T3>, CenterlineError> {
         let edge_id = edge.id();
         let edge_twin_id = self.diagram.edge_get_twin(edge_id)?;
 
@@ -1886,7 +1883,7 @@ where
             );
             #[cfg(feature = "console_debug")]
             println!("Converted {:?} to {:?}", edge.id().0, arc);
-            Ok(linestring_3d::Shape3d::ParabolicArc(arc))
+            Ok(Shape3d::ParabolicArc(arc))
         } else {
             let distance_to_start = {
                 if vertex0.is_site_point() {
@@ -1945,7 +1942,7 @@ where
             };
             #[cfg(feature = "console_debug")]
             println!("Converted {:?} to {:?}", edge.id().0, line);
-            Ok(linestring_3d::Shape3d::Line(line))
+            Ok(Shape3d::Line(line))
         }
     }
 }
@@ -2079,7 +2076,7 @@ impl<T: GenericVector2> LineStringSet2<T> {
 
     /// drains the 'other' container of all shapes and put them into 'self'
     pub fn take_from(&mut self, mut other: Self) {
-        self.aabb.update_aabb(other.aabb);
+        self.aabb.update_with_aabb(other.aabb);
         self.set.append(&mut other.set);
     }
 
@@ -2214,7 +2211,14 @@ impl<T: GenericVector3> LineStringSet3<T> {
 
     /// drains the 'other' container of all shapes and put them into 'self'
     pub fn take_from(&mut self, other: &mut Self) {
-        self.aabb.update_aabb(other.aabb);
+        self.aabb.update_with_aabb(other.aabb);
         self.set.append(&mut other.set);
     }
+}
+
+/// Placeholder for different 3d shapes
+pub enum Shape3d<T: GenericVector3> {
+    Line(Line3<T>),
+    Linestring(Vec<T>),
+    ParabolicArc(linestring_2d::VoronoiParabolicArc<T::Vector2>),
 }
